@@ -1,7 +1,5 @@
 use crate::random_utils::fill_random;
-use crate::udp_data::{
-    FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader, now_micros, read_header, write_header,
-};
+use crate::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader, now_micros};
 use crate::ui::{final_report, take_period_report};
 use anyhow::Result;
 use std::io::{Write, stdout};
@@ -55,7 +53,7 @@ impl UdpTest {
                 continue;
             }
 
-            let header = read_header(&mut buf);
+            let header = UdpHeader::read_header(&mut buf);
 
             self.udp_data.process_packet(len, &header, start.elapsed());
 
@@ -104,14 +102,9 @@ impl UdpTest {
             fill_random(&mut buf, self.payload_size)?;
             //  not you can use any random  base insted of using the unix_epoch
             let (sec, usec) = now_micros();
-            let hdr = UdpHeader {
-                seq,
-                sec,
-                usec,
-                flags: FLAG_DATA,
-            };
+            let mut header = UdpHeader::new(seq, sec, usec, FLAG_DATA);
+            header.write_header(&mut buf);
 
-            write_header(&mut buf[..HEADER_SIZE], &hdr);
             sock.send(&buf)?;
             seq += 1;
 
@@ -150,14 +143,10 @@ impl UdpTest {
 
         // FIN
         let (sec, usec) = now_micros();
-        let fin = UdpHeader {
-            seq,
-            sec,
-            usec,
-            flags: FLAG_FIN,
-        };
+        let mut fin = UdpHeader::new(seq, sec, usec, FLAG_FIN);
         fill_random(&mut buf, self.payload_size)?;
-        write_header(&mut buf[..HEADER_SIZE], &fin);
+        fin.write_header(&mut buf);
+
         sock.send(&buf)?;
         println!("Client done. Sent {} packets (+FIN)", seq);
 

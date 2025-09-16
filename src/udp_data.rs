@@ -11,28 +11,38 @@ pub struct UdpHeader {
     pub flags: u32, // 0 = data, 1 = FIN (end of test)
 }
 
-// helper functions
-pub fn write_header(buffer: &mut [u8], header: &UdpHeader) {
-    assert!(buffer.len() >= HEADER_SIZE);
+impl UdpHeader {
+    pub fn new(seq: u64, sec: u64, usec: u32, flag: u32) -> Self {
+        Self {
+            seq: seq,
+            sec: sec,
+            usec: usec,
+            flags: flag,
+        }
+    }
+    pub fn write_header(&mut self, buffer: &mut [u8]) {
+        assert!(buffer.len() >= HEADER_SIZE);
 
-    buffer[0..8].copy_from_slice(&header.seq.to_be_bytes());
-    buffer[8..16].copy_from_slice(&header.sec.to_be_bytes());
-    buffer[16..20].copy_from_slice(&header.usec.to_be_bytes());
-    buffer[20..24].copy_from_slice(&header.flags.to_be_bytes());
-}
+        buffer[0..8].copy_from_slice(&self.seq.to_be_bytes());
+        buffer[8..16].copy_from_slice(&self.sec.to_be_bytes());
+        buffer[16..20].copy_from_slice(&self.usec.to_be_bytes());
+        buffer[20..24].copy_from_slice(&self.flags.to_be_bytes());
+    }
 
-pub fn read_header(buffer: &mut [u8]) -> UdpHeader {
-    let seq = u64::from_be_bytes(buffer[0..8].try_into().unwrap());
-    let sec = u64::from_be_bytes(buffer[8..16].try_into().unwrap());
-    let usec = u32::from_be_bytes(buffer[16..20].try_into().unwrap());
-    let flags = u32::from_be_bytes(buffer[20..24].try_into().unwrap());
-    UdpHeader {
-        seq,
-        sec,
-        usec,
-        flags,
+    pub fn read_header(buffer: &mut [u8]) -> Self {
+        let seq = u64::from_be_bytes(buffer[0..8].try_into().unwrap());
+        let sec = u64::from_be_bytes(buffer[8..16].try_into().unwrap());
+        let usec = u32::from_be_bytes(buffer[16..20].try_into().unwrap());
+        let flags = u32::from_be_bytes(buffer[20..24].try_into().unwrap());
+        Self {
+            seq,
+            sec,
+            usec,
+            flags,
+        }
     }
 }
+// helper functions
 
 pub fn now_micros() -> (u64, u32) {
     let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -68,7 +78,6 @@ impl UdpData {
     pub fn process_packet(&mut self, packet_len: usize, h: &UdpHeader, now_since_start: Duration) {
         self.received += 1;
         self.bytes += packet_len;
-        // println!("seqnce {}",h.seq);
         //  determine losses ,out of order
         match self.last_seq {
             None => self.last_seq = Some(h.seq),
@@ -80,9 +89,9 @@ impl UdpData {
                     //set the last accepted sequence to be packet sequnce
                     self.last_seq = Some(h.seq);
                 } else if h.seq > (prev + 1) {
-                    // when the header sequenc is bigger than the previous sequenc +1
+                    // when the header sequence is bigger than the previous sequence +1
                     self.lost = h.seq - (prev + 1);
-                    self.last_seq = Some(h.sec);
+                    self.last_seq = Some(h.seq);
                 } else {
                     // out of order happend when h.seq<prev
                     self.out_of_order += 1;
@@ -91,6 +100,10 @@ impl UdpData {
         }
 
         //proccess jitter
+        // Jitter per RFC3550 (in milliseconds)
+        // And read https://support.spirent.com/s/article/FAQ13756
+        // Not that  send_ms uses sender's clock (may differ from server), but jitter is based on differences
+        // There is no need for NTP
 
         let send_ms = (h.sec as f64) * 1000.0 + (h.usec as f64) / 1000.0;
         let arrival_ms = now_since_start.as_secs_f64() * 1000.0; // relative to server start
