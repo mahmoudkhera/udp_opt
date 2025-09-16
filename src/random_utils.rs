@@ -3,14 +3,15 @@ use anyhow::Result;
 pub fn fill_random(buffer: &mut [u8], length: usize) -> Result<()> {
     #[cfg(unix)]
     {
-        use tokio::fs::File;
-        use tokio::io::AsyncReadExt;
-        let mut random = File::open("/dev/urandom")
-            .await
-            .context("Failed to open /dev/urandom")?;
+        use std::{fs::File, io::Read};
+
+        use anyhow::Context;
+        let _ = length;
+
+        let mut random = File::open("/dev/urandom").context("Failed to open /dev/urandom")?;
+
         random
             .read_exact(buffer)
-            .await
             .context("Failed to read random bytes from /dev/urandom")?;
 
         Ok(())
