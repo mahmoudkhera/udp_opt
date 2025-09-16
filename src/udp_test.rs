@@ -74,7 +74,7 @@ impl UdpTest {
     }
 
     pub fn client(&mut self, dest: SocketAddr) -> Result<()> {
-        //thest for test in the same machine
+       
         let sock = UdpSocket::bind("0.0.0.0:0")?;
 
         sock.connect(&dest)?;
