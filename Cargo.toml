@@ -1,7 +1,11 @@
 [package]
 name = "udp_opt"
 version = "0.1.0"
+authors = ["Mahmoud Khaled Khera"]
+repository="https://github.com/mahmoudkhera/udp_opt.git"
+license = "MIT OR Apache-2.0"
 edition = "2024"
+
 
 [dependencies]
 anyhow={version="1.0.99"}
