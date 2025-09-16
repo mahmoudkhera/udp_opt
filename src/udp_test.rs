@@ -37,11 +37,12 @@ impl UdpTest {
     pub fn server(&mut self) -> Result<()> {
         println!("server start");
 
-        let sock = UdpSocket::bind(self.addr)?;
+        let sock = UdpSocket::bind(&self.addr)?;
         let mut buf = vec![0u8; 64 * 1024];
 
         // wait for the start udp packet to start the test
         let (_, _) = sock.recv_from(&mut buf)?;
+        println!("{:?}",self.addr);
 
         let start = Instant::now();
         let mut period_report = Instant::now();
