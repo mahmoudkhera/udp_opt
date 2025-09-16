@@ -83,7 +83,7 @@ impl UdpData {
             None => self.last_seq = Some(h.seq),
 
             Some(prev) => {
-                if h.sec == prev {
+                if h.seq == prev {
                     //duplicate packet
                 } else if h.seq == prev + 1 {
                     //set the last accepted sequence to be packet sequnce
