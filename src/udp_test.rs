@@ -1,7 +1,7 @@
+use crate::errors::MyError;
 use crate::random_utils::fill_random;
 use crate::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader, now_micros};
 use crate::ui::{final_report, take_period_report};
-use anyhow::Result;
 use std::io::{Write, stdout};
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -34,21 +34,25 @@ impl UdpTest {
         }
     }
 
-    pub fn server(&mut self) -> Result<()> {
+    pub fn server(&mut self) -> Result<(), MyError> {
         println!("server start");
 
-        let sock = UdpSocket::bind(&self.addr)?;
+        let sock = UdpSocket::bind(&self.addr).map_err(MyError::BindFailed)?;
         let mut buf = vec![0u8; 64 * 1024];
 
         // wait for the start udp packet to start the test
-        let (_, _) = sock.recv_from(&mut buf)?;
-        println!("{:?}",self.addr);
+        let (_, _) = sock
+            .recv_from(&mut buf)
+            .map_err(|e| MyError::RecvFailed(e))?;
+        println!("{:?}", self.addr);
 
         let start = Instant::now();
         let mut period_report = Instant::now();
 
         loop {
-            let (len, _) = sock.recv_from(&mut buf)?;
+            let (len, _) = sock
+                .recv_from(&mut buf)
+                .map_err(|e| MyError::RecvFailed(e))?;
 
             if len < HEADER_SIZE {
                 continue;
@@ -74,11 +78,10 @@ impl UdpTest {
         Ok(())
     }
 
-    pub fn client(&mut self, dest: SocketAddr) -> Result<()> {
-       
-        let sock = UdpSocket::bind("0.0.0.0:0")?;
+    pub fn client(&mut self, dest: SocketAddr) -> Result<(), MyError> {
+        let sock = UdpSocket::bind("0.0.0.0:0").map_err(MyError::BindFailed)?;
 
-        sock.connect(&dest)?;
+        sock.connect(&dest).map_err(MyError::ConnectFailed)?;
 
         let bits_per_packet = (self.payload_size * 8) as f64;
         let packet_per_second = (self.bitrate_bps / bits_per_packet).max(1.0);
@@ -90,7 +93,7 @@ impl UdpTest {
         let mut buf = vec![0u8; self.payload_size];
 
         //send a packet that tell the server to start
-        sock.send(&buf)?;
+        sock.send(&buf).map_err(|e| MyError::SendFailed(e))?;
 
         let start = Instant::now();
         let mut report_time = Instant::now();
@@ -100,13 +103,13 @@ impl UdpTest {
                 break;
             }
 
-            fill_random(&mut buf, self.payload_size)?;
+            fill_random(&mut buf, self.payload_size).map_err(|_| MyError::FillRandomFailed)?;
             //  not you can use any random  base insted of using the unix_epoch
             let (sec, usec) = now_micros();
             let mut header = UdpHeader::new(seq, sec, usec, FLAG_DATA);
             header.write_header(&mut buf);
 
-            sock.send(&buf)?;
+            sock.send(&buf).map_err(|e| MyError::SendFailed(e))?;
             seq += 1;
 
             // this section of code determine when the next packet must be sent depnds
@@ -145,10 +148,10 @@ impl UdpTest {
         // FIN
         let (sec, usec) = now_micros();
         let mut fin = UdpHeader::new(seq, sec, usec, FLAG_FIN);
-        fill_random(&mut buf, self.payload_size)?;
+        fill_random(&mut buf, self.payload_size).map_err(|_| MyError::FillRandomFailed)?;
         fin.write_header(&mut buf);
 
-        sock.send(&buf)?;
+        sock.send(&buf).map_err(|e| MyError::SendFailed(e))?;
         println!("Client done. Sent {} packets (+FIN)", seq);
 
         Ok(())

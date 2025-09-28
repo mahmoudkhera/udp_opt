@@ -1,25 +1,20 @@
-use anyhow::Result;
+use std::io;
 
-pub fn fill_random(buffer: &mut [u8], length: usize) ->Result<()> {
+pub fn fill_random(buffer: &mut [u8], length: usize) -> Result<(), io::Error> {
     #[cfg(unix)]
     {
         use std::{fs::File, io::Read};
 
-        use anyhow::Context;
         let _ = length;
 
-        let mut random = File::open("/dev/urandom").context("Failed to open /dev/urandom")?;
+        let mut random = File::open("/dev/urandom")?;
 
-        random
-            .read_exact(buffer)
-            .context("Failed to read random bytes from /dev/urandom")?;
-
-        Ok(())
+        random.read_exact(buffer)?;
     }
 
     #[cfg(windows)]
     {
-       // Flags: use the system-preferred RNG without opening an algorithm handle
+        // Flags: use the system-preferred RNG without opening an algorithm handle
         const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x00000002;
 
         #[link(name = "bcrypt")]
@@ -45,6 +40,6 @@ pub fn fill_random(buffer: &mut [u8], length: usize) ->Result<()> {
             }
         }
 
-     Ok(())
+        Ok(())
     }
 }
