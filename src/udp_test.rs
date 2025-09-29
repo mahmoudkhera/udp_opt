@@ -1,5 +1,5 @@
 use crate::errors::MyError;
-use crate::random_utils::fill_random;
+use crate::random_utils::RandomToSend;
 use crate::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader, now_micros};
 use crate::ui::{final_report, take_period_report};
 use std::io::{Write, stdout};
@@ -79,7 +79,7 @@ impl UdpTest {
     }
 
     pub fn client(&mut self, dest: SocketAddr) -> Result<(), MyError> {
-        let sock = UdpSocket::bind("0.0.0.0:0").map_err(MyError::BindFailed)?;
+        let sock = UdpSocket::bind(self.addr).map_err(MyError::BindFailed)?;
 
         sock.connect(&dest).map_err(MyError::ConnectFailed)?;
 
@@ -91,6 +91,7 @@ impl UdpTest {
         let mut seq: u64 = 0;
 
         let mut buf = vec![0u8; self.payload_size];
+        let mut random = RandomToSend::new().map_err(|e| MyError::FailToGetRandom(e))?;
 
         //send a packet that tell the server to start
         sock.send(&buf).map_err(|e| MyError::SendFailed(e))?;
@@ -103,8 +104,9 @@ impl UdpTest {
                 break;
             }
 
-            fill_random(&mut buf, self.payload_size).map_err(|_| MyError::FillRandomFailed)?;
-            //  not you can use any random  base insted of using the unix_epoch
+            random
+                .fill(&mut buf)
+                .map_err(|e| MyError::FailToGetRandom(e))?; //  not you can use any random  base insted of using the unix_epoch
             let (sec, usec) = now_micros();
             let mut header = UdpHeader::new(seq, sec, usec, FLAG_DATA);
             header.write_header(&mut buf);
@@ -148,7 +150,9 @@ impl UdpTest {
         // FIN
         let (sec, usec) = now_micros();
         let mut fin = UdpHeader::new(seq, sec, usec, FLAG_FIN);
-        fill_random(&mut buf, self.payload_size).map_err(|_| MyError::FillRandomFailed)?;
+        random
+            .fill(&mut buf)
+            .map_err(|e| MyError::FailToGetRandom(e))?; //  not you can use any random  base insted of using the unix_epoch
         fin.write_header(&mut buf);
 
         sock.send(&buf).map_err(|e| MyError::SendFailed(e))?;
