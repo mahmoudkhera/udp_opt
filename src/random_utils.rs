@@ -19,7 +19,7 @@ impl RandomToSend {
     pub fn new() -> io::Result<Self> {
         #[cfg(unix)]
         {
-            let file = File::open("/dev/urandom")?;
+            let file = std::fs::File::open("/dev/urandom")?;
             Ok(Self { file })
         }
 
