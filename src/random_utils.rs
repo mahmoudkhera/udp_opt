@@ -32,6 +32,8 @@ impl RandomToSend {
     pub fn fill(&mut self, buffer: &mut [u8]) -> io::Result<()> {
         #[cfg(unix)]
         {
+            use std::io::Read;
+
             let mut total_read = 0;
             while total_read < buffer.len() {
                 match self.file.read(&mut buffer[total_read..])? {
