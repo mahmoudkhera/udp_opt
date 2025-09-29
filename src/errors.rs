@@ -20,5 +20,5 @@ pub enum MyError {
     #[error("Invalid address: {0}")]
     InvalidAddress(#[from] AddrParseError),
     #[error("Get random for the test  faild ")]
-       FailToGetRandom(io::Error),
+    FailToGetRandom(io::Error),
 }

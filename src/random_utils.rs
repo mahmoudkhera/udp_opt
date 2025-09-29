@@ -28,9 +28,6 @@ impl RandomToSend {
             Ok(Self {})
         }
     }
-    
-    
-    
 
     pub fn fill(&mut self, buffer: &mut [u8]) -> io::Result<()> {
         #[cfg(unix)]
@@ -65,37 +62,5 @@ impl RandomToSend {
                 Ok(())
             }
         }
-    }
-}
-pub fn fill_random(buffer: &mut [u8], length: usize) -> Result<(), io::Error> {
-    #[cfg(unix)]
-    {
-        use std::{fs::File, io::Read};
-
-        let _ = length;
-
-        let mut random = File::open("/dev/urandom")?;
-
-        random.read_exact(buffer)?;
-
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    {
-        unsafe {
-            let status = BCryptGenRandom(
-                0, // use system-preferred RNG
-                buffer.as_mut_ptr(),
-                length as u32,
-                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-            );
-
-            if status != 0 {
-                println!("BCryptGenRandom failed with status: {:#x}", status);
-            }
-        }
-
-        Ok(())
     }
 }
