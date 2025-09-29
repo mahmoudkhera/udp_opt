@@ -77,6 +77,8 @@ pub fn fill_random(buffer: &mut [u8], length: usize) -> Result<(), io::Error> {
         let mut random = File::open("/dev/urandom")?;
 
         random.read_exact(buffer)?;
+
+        Ok(())
     }
 
     #[cfg(windows)]
