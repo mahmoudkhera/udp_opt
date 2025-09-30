@@ -44,10 +44,12 @@ impl UdpTest {
         let (_, _) = sock
             .recv_from(&mut buf)
             .map_err(|e| MyError::RecvFailed(e))?;
-        println!("{:?}", self.addr);
 
         let start = Instant::now();
         let mut period_report = Instant::now();
+
+        let mut calc_instat = Instant::now();
+        let calc_interval = Duration::from_millis(200);
 
         loop {
             let (len, _) = sock
@@ -61,6 +63,12 @@ impl UdpTest {
             let header = UdpHeader::read_header(&mut buf);
 
             self.udp_data.process_packet(len, &header, start.elapsed());
+
+            let time_to_calc_bitrate = calc_instat.elapsed();
+            if time_to_calc_bitrate >= calc_interval {
+                self.udp_data.calc_bitrate(time_to_calc_bitrate);
+                calc_instat = Instant::now();
+            }
 
             if header.flags == FLAG_FIN {
                 final_report(&self.udp_data, start);
@@ -245,16 +253,12 @@ mod tests {
         let result = ipp(payload, bitrate);
 
         // Should handle small bitrates correctly
-        // 8192 bits / 100 bps = 81.92 seconds per packet 
+        // 8192 bits / 100 bps = 81.92 seconds per packet
         // but .max enforce it to be at least 1 packet to be sent
         let expected = Duration::from_secs_f64(1.0);
-      
+
         assert_eq!(result, expected);
     }
-
- 
-
-
 
     #[test]
     fn test_time_to_next_target_immediate() {
@@ -362,7 +366,7 @@ mod tests {
 
         let result = test.client(dest);
 
-        println!("resi;t {:?}",result);
+        println!("resi;t {:?}", result);
 
         // Should fail to bind
         assert!(result.is_err());
@@ -393,7 +397,4 @@ mod tests {
             assert!(result.as_secs_f64().is_finite());
         }
     }
-
-
-
 }
