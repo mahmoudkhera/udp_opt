@@ -32,7 +32,7 @@ impl UdpServer {
         })
     }
 
-    pub fn server(&mut self) -> Result<(), MyError> {
+    pub fn run(&mut self) -> Result<(), MyError> {
         println!("server start");
 
         let mut udp_data = UdpData::new();
@@ -79,6 +79,7 @@ impl UdpServer {
                     result: udp_data.get_interval_result(),
                     time: start,
                 });
+
                 period_report = Instant::now();
             }
         }
@@ -117,7 +118,7 @@ impl UdpClient {
         })
     }
 
-    pub fn client(&mut self, dest: SocketAddr) -> Result<(), MyError> {
+    pub fn run(&mut self, dest: SocketAddr) -> Result<(), MyError> {
         self.sock.connect(&dest).map_err(MyError::ConnectFailed)?;
 
         let interval_per_packet = ipp(self.payload_size, self.bitrate_bps);
