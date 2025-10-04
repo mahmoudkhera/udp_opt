@@ -3,7 +3,7 @@ use std::{io, net::AddrParseError, time::Duration};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum MyError {
+pub enum UdpOptError {
     #[error("Failed to pind socket address: {0}")]
     BindFailed(io::Error),
     #[error("Udp socket failed to send data: {0}")]
