@@ -77,7 +77,9 @@ impl UdpClient {
     /// Returns [`UdpOptError::ConnectFailed`] if socket cannot connect.
 
     pub fn run(&mut self, dest: SocketAddr) -> Result<(), UdpOptError> {
-        self.sock.connect(&dest).map_err(UdpOptError::ConnectFailed)?;
+        self.sock
+            .connect(&dest)
+            .map_err(UdpOptError::ConnectFailed)?;
 
         let interval_per_packet = ipp(self.payload_size, self.bitrate_bps);
 
@@ -107,7 +109,9 @@ impl UdpClient {
             let mut header = UdpHeader::new(seq, sec, usec, FLAG_DATA);
             header.write_header(&mut buf);
 
-            self.sock.send(&buf).map_err(|e| UdpOptError::SendFailed(e))?;
+            self.sock
+                .send(&buf)
+                .map_err(|e| UdpOptError::SendFailed(e))?;
 
             seq += 1;
             time_to_next_target(seq, interval_per_packet, start);
@@ -121,7 +125,9 @@ impl UdpClient {
         let mut fin = UdpHeader::new(seq, sec, usec, FLAG_FIN);
         fin.write_header(&mut buf);
 
-        self.sock.send(&buf).map_err(|e| UdpOptError::SendFailed(e))?;
+        self.sock
+            .send(&buf)
+            .map_err(|e| UdpOptError::SendFailed(e))?;
         println!("Client done. Sent {} packets (+FIN)", seq);
 
         Ok(())
@@ -157,5 +163,229 @@ fn time_to_next_target(seq: u64, ipp: Duration, start: Instant) {
             // short spin / yield
             std::thread::yield_now();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpHeader};
+    use std::net::{SocketAddr, UdpSocket};
+    use std::sync::mpsc::{self, Sender};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    // Helper function to get an available address
+    fn get_available_addr() -> SocketAddr {
+        "127.0.0.1:0".parse().unwrap()
+    }
+
+    // Helper to create a test client with control channel
+    fn create_test_client(
+        bitrate_bps: f64,
+        payload_size: usize,
+        timeout: Duration,
+    ) -> (UdpClient, Sender<ClientCommand>) {
+        let (tx, rx) = mpsc::channel();
+        let addr = get_available_addr();
+        let client = UdpClient::new(addr, bitrate_bps, payload_size, timeout, rx).unwrap();
+        (client, tx)
+    }
+
+    // Helper to create a receiving server
+    fn create_receiver() -> (UdpSocket, SocketAddr) {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let addr = sock.local_addr().unwrap();
+        (sock, addr)
+    }
+
+    #[test]
+    fn test_udp_client_new() {
+        let (_, rx) = mpsc::channel();
+        let addr = get_available_addr();
+        let client = UdpClient::new(addr, 1_000_000.0, 1500, Duration::from_secs(1), rx);
+
+        assert!(client.is_ok());
+        let client = client.unwrap();
+        assert_eq!(client.bitrate_bps, 1_000_000.0);
+        assert_eq!(client.payload_size, 1500);
+        assert_eq!(client.timeout, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_ipp_calculation() {
+        let interval = ipp(1500, 1_000_000.0);
+        assert!(interval.as_millis() >= 11 && interval.as_millis() <= 13);
+    }
+
+    #[test]
+    fn test_client_sends_packets() {
+        let (mut client, tx) = create_test_client(100_000.0, 100, Duration::from_millis(200));
+        let (receiver, receiver_addr) = create_receiver();
+
+        // Start client in a thread
+        let client_thread = thread::spawn(move || client.run(receiver_addr));
+
+        // Send start command
+        tx.send(ClientCommand::Start).unwrap();
+
+        let mut buf = vec![0u8; 2048];
+        let mut packet_count = 0;
+        let mut received_fin = false;
+
+        // Receive packets
+        loop {
+            match receiver.recv(&mut buf) {
+                Ok(len) => {
+                    if len >= HEADER_SIZE {
+                        let header = UdpHeader::read_header(&mut buf);
+                        packet_count += 1;
+
+                        if header.flags == FLAG_FIN {
+                            received_fin = true;
+                            break;
+                        }
+                    }
+                }
+                Err(_) => break, // Timeout
+            }
+        }
+
+        // Wait for client to finish
+        let result = client_thread.join().unwrap();
+        assert!(result.is_ok());
+        assert!(packet_count > 0, "Should receive at least one packet");
+        assert!(received_fin, "Should receive FIN packet");
+    }
+
+    #[test]
+    fn test_client_respects_timeout() {
+        let timeout = Duration::from_millis(100);
+        let (mut client, tx) = create_test_client(1_000_000.0, 1000, timeout);
+        let (_, receiver_addr) = create_receiver();
+
+        let start = Instant::now();
+
+        // Start client in a thread
+        let client_thread = thread::spawn(move || client.run(receiver_addr));
+
+        // Send start command
+        tx.send(ClientCommand::Start).unwrap();
+
+        // Wait for client to finish
+        client_thread.join().unwrap().unwrap();
+
+        let elapsed = start.elapsed();
+
+        // Should finish around the timeout (with some margin)
+        assert!(elapsed >= timeout);
+        assert!(elapsed < timeout + Duration::from_millis(200));
+    }
+
+    #[test]
+    fn test_client_fin_packet() {
+        let (mut client, tx) = create_test_client(100_000.0, 500, Duration::from_millis(50));
+        let (receiver, receiver_addr) = create_receiver();
+
+        // Start client in a thread
+        let client_thread = thread::spawn(move || client.run(receiver_addr));
+
+        // Send start command
+        tx.send(ClientCommand::Start).unwrap();
+
+        let mut buf = vec![0u8; 2048];
+        let mut last_seq = 0u64;
+        let mut fin_found = false;
+
+        // Receive packets
+        loop {
+            match receiver.recv(&mut buf) {
+                Ok(len) => {
+                    if len >= HEADER_SIZE {
+                        let header = UdpHeader::read_header(&mut buf);
+
+                        if header.flags == FLAG_FIN {
+                            fin_found = true;
+                            // FIN should come after all data packets
+                            assert!(
+                                header.seq >= last_seq,
+                                "FIN sequence should be >= last data sequence"
+                            );
+                            break;
+                        }
+
+                        last_seq = header.seq;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+
+        client_thread.join().unwrap().unwrap();
+        assert!(fin_found, "FIN packet should be sent");
+    }
+
+    #[test]
+    fn test_client_unexpected_stop_before_start() {
+        let (mut client, tx) = create_test_client(100_000.0, 500, Duration::from_millis(100));
+        let (_, receiver_addr) = create_receiver();
+
+        // Start client in a thread
+        let client_thread = thread::spawn(move || client.run(receiver_addr));
+
+        // Send stop before start
+        tx.send(ClientCommand::Stop).unwrap();
+
+        // Should handle gracefully
+        let result = client_thread.join().unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_time_to_next_target_precision() {
+        let start = Instant::now();
+        let ipp = Duration::from_millis(10);
+
+        // Test first packet (seq 1)
+        time_to_next_target(1, ipp, start);
+        let elapsed = start.elapsed();
+
+        // Should wait approximately 10ms
+        assert!(elapsed >= Duration::from_millis(9));
+        assert!(elapsed <= Duration::from_millis(15));
+    }
+
+    #[test]
+    fn test_time_to_next_target_multiple_packets() {
+        let start = Instant::now();
+        let ipp = Duration::from_millis(5);
+
+        // Simulate sending 5 packets
+        for seq in 1..=5 {
+            time_to_next_target(seq, ipp, start);
+        }
+
+        let elapsed = start.elapsed();
+
+        // Should take approximately 25ms (5 * 5ms)
+        assert!(elapsed >= Duration::from_millis(23));
+        assert!(elapsed <= Duration::from_millis(30));
+    }
+
+    #[test]
+    fn test_time_to_next_target_already_past() {
+        let start = Instant::now();
+        thread::sleep(Duration::from_millis(50));
+
+        // Packet is already late
+        let ipp = Duration::from_millis(10);
+
+        let before = Instant::now();
+        time_to_next_target(1, ipp, start);
+        let wait_time = before.elapsed();
+
+        // Should return immediately (very small wait)
+        assert!(wait_time < Duration::from_millis(1));
     }
 }
