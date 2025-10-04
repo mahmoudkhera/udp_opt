@@ -10,18 +10,18 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Size of the UDP header in bytes (seq + sec + usec + flags)
-pub const HEADER_SIZE: usize = 8 + 8 + 4 + 4; // 24 bytes
+pub(crate) const HEADER_SIZE: usize = 8 + 8 + 4 + 4; // 24 bytes
 
 /// Flag indicating a data packet
-pub const FLAG_DATA: u32 = 0;
+pub(crate) const FLAG_DATA: u32 = 0;
 /// Flag indicating the end of a test (FIN)
-pub const FLAG_FIN: u32 = 1;
+pub(crate) const FLAG_FIN: u32 = 1;
 
 /// Represents the header of a UDP packet
-pub struct UdpHeader {
-    pub seq: u64,   // sequence number
-    pub sec: u64,   // seconds since UNIX_EPOCH
-    pub usec: u32,  // microseconds part (0..999_999)
+pub(crate) struct UdpHeader {
+    seq: u64,       // sequence number
+    sec: u64,       // seconds since UNIX_EPOCH
+    usec: u32,      // microseconds part (0..999_999)
     pub flags: u32, // 0 = data, 1 = FIN (end of test)
 }
 
@@ -36,7 +36,7 @@ impl UdpHeader {
     /// - `sec`: seconds since UNIX_EPOCH
     /// - `usec`: microseconds part
     /// - `flag`: packet type (`FLAG_DATA` or `FLAG_FIN`)   
-    pub fn new(seq: u64, sec: u64, usec: u32, flag: u32) -> Self {
+    pub(crate) fn new(seq: u64, sec: u64, usec: u32, flag: u32) -> Self {
         Self {
             seq: seq,
             sec: sec,
@@ -49,7 +49,7 @@ impl UdpHeader {
     ///
     /// # Panics
     /// Panics if the buffer length is smaller than `HEADER_SIZE`
-    pub fn write_header(&mut self, buffer: &mut [u8]) {
+    pub(crate) fn write_header(&mut self, buffer: &mut [u8]) {
         assert!(buffer.len() >= HEADER_SIZE);
 
         buffer[0..8].copy_from_slice(&self.seq.to_be_bytes());
@@ -62,7 +62,7 @@ impl UdpHeader {
     ///
     /// # Panics
     /// Panics if the buffer is smaller than `HEADER_SIZE`.
-    pub fn read_header(buffer: &mut [u8]) -> Self {
+    pub(crate) fn read_header(buffer: &mut [u8]) -> Self {
         let seq = u64::from_be_bytes(buffer[0..8].try_into().unwrap());
         let sec = u64::from_be_bytes(buffer[8..16].try_into().unwrap());
         let usec = u32::from_be_bytes(buffer[16..20].try_into().unwrap());
@@ -96,19 +96,13 @@ pub struct IntervalResult {
 
 /// Tracks UDP statistics and state for a connection
 #[derive(Debug, Clone, Copy)]
-pub struct UdpData {
-    /// Indicates if the first packet has been received
-    pub first_rx_set: bool,
+pub(crate) struct UdpData {
     /// Last received sequence number
-    pub last_seq: Option<u64>,
+    last_seq: Option<u64>,
     /// Interval statistics
-    pub interval_result: IntervalResult,
+    interval_result: IntervalResult,
     /// Previous packet transit time (ms)
-    pub prev_transit_ms: Option<f64>,
-    /// Lost packets in current period
-    pub period_lost: u64,
-    /// Received packets in current period
-    pub period_recived: u64,
+    prev_transit_ms: Option<f64>,
     /// Recommended packets per second
     pub recommend_pps: f64,
 }
@@ -116,14 +110,11 @@ pub struct UdpData {
 impl UdpData {
     /// Creates a new `UdpData` instance
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            first_rx_set: false,
             last_seq: None,
             interval_result: IntervalResult::default(),
             prev_transit_ms: None,
-            period_lost: 0,
-            period_recived: 0,
             recommend_pps: 0.0,
         }
     }
@@ -134,7 +125,12 @@ impl UdpData {
     /// - `packet_len`: length of the packet in bytes
     /// - `h`: reference to the packet header
     /// - `now_since_start`: elapsed time since server start
-    pub fn process_packet(&mut self, packet_len: usize, h: &UdpHeader, now_since_start: Duration) {
+    pub(crate) fn process_packet(
+        &mut self,
+        packet_len: usize,
+        h: &UdpHeader,
+        now_since_start: Duration,
+    ) {
         self.interval_result.received += 1;
         self.interval_result.bytes += packet_len;
         //  determine losses ,out of order
@@ -181,7 +177,7 @@ impl UdpData {
     ///
     /// # Parameters
     /// - `time`: duration of the measurement period
-    pub fn calc_bitrate(&mut self, time: Duration) {
+    pub(crate) fn calc_bitrate(&mut self, time: Duration) {
         let received = self.interval_result.received;
         let lost = self.interval_result.lost;
         // Reset early if no packets to avoid div-by-zero
@@ -223,7 +219,7 @@ impl UdpData {
 
     /// Returns interval statistics and resets them
 
-    pub fn get_interval_result(&mut self) -> IntervalResult {
+    pub(crate) fn get_interval_result(&mut self) -> IntervalResult {
         let r = std::mem::take(&mut self.interval_result);
         r
     }
@@ -296,12 +292,9 @@ mod tests {
     fn test_udp_data_new() {
         let data = UdpData::new();
 
-        assert_eq!(data.first_rx_set, false);
         assert_eq!(data.last_seq, None);
         assert_eq!(data.interval_result.received, 0);
         assert_eq!(data.prev_transit_ms, None);
-        assert_eq!(data.period_lost, 0);
-        assert_eq!(data.period_recived, 0);
         assert_eq!(data.recommend_pps, 0.0);
     }
 

@@ -1,4 +1,4 @@
-use crate::udp_data::IntervalResult;
+use crate::utils::udp_data::IntervalResult;
 use std::time::Duration;
 
 /// Final aggregated test statistics computed from a list of `IntervalResult`s.
@@ -121,7 +121,7 @@ pub fn median_f64(v: &mut [f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::udp_data::IntervalResult;
+    use crate::utils::udp_data::IntervalResult;
     use std::time::Duration;
 
     // Helper function to create a test interval

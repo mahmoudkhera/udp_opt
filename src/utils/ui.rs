@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::server::TestResult;
 
-pub fn print_result(test_result: TestResult) {
+pub fn print_result(test_result: &TestResult) {
     let elapsed = test_result.time.as_secs_f64();
     let mbps = if elapsed > 0.0 {
         (test_result.result.bytes as f64 * 8.0) / elapsed / 1_000_000.0

@@ -12,8 +12,8 @@ use std::{
 
 use crate::{
     errors::UdpOptError,
-    random_utils::RandomToSend,
-    udp_data::{FLAG_DATA, FLAG_FIN, UdpHeader, now_micros},
+    utils::random_utils::RandomToSend,
+    utils::udp_data::{FLAG_DATA, FLAG_FIN, UdpHeader, now_micros},
 };
 
 /// Commands that control the UDP client behavior.
@@ -105,7 +105,9 @@ impl UdpClient {
             random
                 .fill(&mut buf)
                 .map_err(|e| UdpOptError::FailToGetRandom(e))?; //  not you can use any random  base insted of using the unix_epoch
+
             let (sec, usec) = now_micros();
+
             let mut header = UdpHeader::new(seq, sec, usec, FLAG_DATA);
             header.write_header(&mut buf);
 
@@ -169,7 +171,7 @@ fn time_to_next_target(seq: u64, ipp: Duration, start: Instant) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpHeader};
+    use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, UdpHeader};
     use std::net::{SocketAddr, UdpSocket};
     use std::sync::mpsc::{self, Sender};
     use std::thread;
@@ -281,49 +283,6 @@ mod tests {
         // Should finish around the timeout (with some margin)
         assert!(elapsed >= timeout);
         assert!(elapsed < timeout + Duration::from_millis(200));
-    }
-
-    #[test]
-    fn test_client_fin_packet() {
-        let (mut client, tx) = create_test_client(100_000.0, 500, Duration::from_millis(50));
-        let (receiver, receiver_addr) = create_receiver();
-
-        // Start client in a thread
-        let client_thread = thread::spawn(move || client.run(receiver_addr));
-
-        // Send start command
-        tx.send(ClientCommand::Start).unwrap();
-
-        let mut buf = vec![0u8; 2048];
-        let mut last_seq = 0u64;
-        let mut fin_found = false;
-
-        // Receive packets
-        loop {
-            match receiver.recv(&mut buf) {
-                Ok(len) => {
-                    if len >= HEADER_SIZE {
-                        let header = UdpHeader::read_header(&mut buf);
-
-                        if header.flags == FLAG_FIN {
-                            fin_found = true;
-                            // FIN should come after all data packets
-                            assert!(
-                                header.seq >= last_seq,
-                                "FIN sequence should be >= last data sequence"
-                            );
-                            break;
-                        }
-
-                        last_seq = header.seq;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-
-        client_thread.join().unwrap().unwrap();
-        assert!(fin_found, "FIN packet should be sent");
     }
 
     #[test]

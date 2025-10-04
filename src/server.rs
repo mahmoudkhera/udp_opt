@@ -5,7 +5,8 @@
 //! interval-based test results.
 
 use crate::errors::UdpOptError;
-use crate::udp_data::{FLAG_FIN, HEADER_SIZE, IntervalResult, UdpData, UdpHeader};
+use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, IntervalResult, UdpData, UdpHeader};
+use crate::utils::ui::print_result;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -82,6 +83,12 @@ impl UdpServer {
             ServerCommand::Start => {}
         }
 
+        // start measuring after reciving the first packt
+        let _ = self
+            .sock
+            .recv(&mut buf)
+            .map_err(|e| UdpOptError::RecvFailed(e))?;
+
         let mut calc_instat = Instant::now();
         let calc_interval = Duration::from_millis(200);
         let mut start = Instant::now();
@@ -125,10 +132,13 @@ impl UdpServer {
             }
 
             if start.elapsed() >= self.interval {
-                self.udp_result.push(TestResult {
+                let test_result = TestResult {
                     result: udp_data.get_interval_result(),
                     time: start.elapsed(),
-                });
+                };
+                print_result(&test_result);
+
+                self.udp_result.push(test_result);
 
                 start = Instant::now();
             }
@@ -146,7 +156,7 @@ impl UdpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpHeader};
+    use crate::utils::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpHeader};
     use std::net::{SocketAddr, UdpSocket};
     use std::sync::mpsc::{self, Sender};
     use std::thread;
