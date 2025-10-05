@@ -1,6 +1,6 @@
 //! # Cross-Platform Random Number Generator
 //!
-//! Provides a random number generator for filling buffers with random bytes,
+//! Provides sync and async  random number generator for filling buffers with random bytes,
 //! compatible with both Unix-like systems and Windows.  
 //! On Unix, it uses `/dev/urandom`.  
 //! On Windows, it uses the system-preferred RNG via `BCryptGenRandom`.
@@ -77,6 +77,83 @@ impl RandomToSend {
                     BCRYPT_USE_SYSTEM_PREFERRED_RNG,
                 )
             };
+
+            if status != 0 {
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("BCryptGenRandom failed {:#x}", status),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+pub struct AsyncRandomToSend {
+    #[cfg(unix)]
+    file: tokio::fs::File,
+}
+
+impl AsyncRandomToSend {
+    /// Creates a new `AsyncRandomToSend`.
+    ///
+    /// - On Unix, opens `/dev/urandom` asynchronously.
+    /// - On Windows, no actual I/O is required, so this is a fast operation.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an `io::Error` if `/dev/urandom` cannot be opened on Unix.
+    /// - On Windows, this function always succeeds.
+    pub async fn new() -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            let file = tokio::fs::File::open("/dev/urandom").await?;
+            Ok(Self { file })
+        }
+
+        #[cfg(windows)]
+        {
+            Ok(Self {})
+        }
+    }
+
+    /// Asynchronously fills the given buffer with cryptographically secure random bytes.
+    ///
+    /// # Parameters
+    ///
+    /// - `buffer`: A mutable byte slice that will be filled with random data.
+    ///
+    /// # Errors
+    ///
+    /// - On Unix, returns any `tokio::io::Error` encountered while reading.
+    /// - On Windows, returns an error if `BCryptGenRandom` fails.
+    ///
+
+    pub async fn fill(&mut self, buffer: &mut [u8]) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            use tokio::io::AsyncReadExt;
+            let mut total = 0;
+            while total < buffer.len() {
+                let n = self.file.read(&mut buffer[total..]).await?;
+                if n == 0 {
+                    break;
+                }
+                total += n;
+            }
+            Ok(())
+        }
+
+        // note that this functin in non-bloking in  nature
+        #[cfg(windows)]
+        unsafe {
+            let status = BCryptGenRandom(
+                0,
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+            );
 
             if status != 0 {
                 Err(io::Error::new(
