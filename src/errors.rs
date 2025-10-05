@@ -1,4 +1,4 @@
-use std::{io, net::AddrParseError, time::Duration};
+use std::{io, net::AddrParseError, sync::mpsc::RecvError, time::Duration};
 
 use thiserror::Error;
 
@@ -21,4 +21,10 @@ pub enum UdpOptError {
     InvalidAddress(#[from] AddrParseError),
     #[error("Get random for the test  faild ")]
     FailToGetRandom(io::Error),
+
+    #[error("Unexpected Stop  command ")]
+    UnexpectedCommand,
+
+    #[error("Channel cloased ")]
+    ChannelClosed
 }
