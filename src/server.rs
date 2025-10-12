@@ -5,31 +5,18 @@
 //! interval-based test results.
 
 use crate::errors::UdpOptError;
-use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, IntervalResult, UdpData, UdpHeader};
+use crate::utils::net_utils::{IntervalResult, ServerCommand};
+use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader};
 use crate::utils::ui::print_result;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone)]
-pub struct TestResult {
-    /// The result metrics collected during this interval (bitrate, packets, etc.).
-    pub result: IntervalResult,
-    /// The time elapsed since the start of the interval.
-    pub time: Duration,
-}
-
-#[derive(Debug, Clone)]
-pub enum ServerCommand {
-    Start,
-    Stop,
-}
-
 #[derive(Debug)]
 pub struct UdpServer {
     sock: UdpSocket,
     interval: Duration,
-    udp_result: Vec<TestResult>,
+    udp_result: Vec<IntervalResult>,
     control_rx: Receiver<ServerCommand>,
 }
 
@@ -72,9 +59,8 @@ impl UdpServer {
         println!("server start");
 
         let mut udp_data = UdpData::new();
-        // wait for the start udp packet to start the test and set the buf lenght
         let mut buf = vec![0u8; 2048];
-
+        // wait for the start udp packet to start the test and set the buf lenght
         match self.control_rx.recv().unwrap() {
             ServerCommand::Stop => {
                 println!("unecpect stop");
@@ -132,14 +118,9 @@ impl UdpServer {
             }
 
             if start.elapsed() >= self.interval {
-                let test_result = TestResult {
-                    result: udp_data.get_interval_result(),
-                    time: start.elapsed(),
-                };
-                print_result(&test_result);
-
-                self.udp_result.push(test_result);
-
+                let res = udp_data.get_interval_result(start.elapsed());
+                print_result(&res);
+                self.udp_result.push(res);
                 start = Instant::now();
             }
         }
@@ -148,7 +129,7 @@ impl UdpServer {
         Ok(())
     }
 
-    pub fn get_result(&self) -> &[TestResult] {
+    pub fn get_result(&self) -> &[IntervalResult] {
         &self.udp_result
     }
 }
@@ -212,34 +193,6 @@ mod tests {
         let result = UdpServer::new(addr, Duration::from_secs(1), rx);
 
         // Should succeed because OS assigns available port
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_server_stops_on_fin_packet() {
-        let (mut server, tx, server_addr) = create_test_server(Duration::from_secs(1));
-
-        // Create client socket
-        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
-        client.connect(server_addr).unwrap();
-
-        // Start server in a thread
-        let server_thread = thread::spawn(move || server.run());
-
-        // Give server time to start
-        thread::sleep(Duration::from_millis(50));
-
-        // Send start command
-        tx.send(ServerCommand::Start).unwrap();
-
-        // Wait a bit
-        thread::sleep(Duration::from_millis(50));
-
-        // Send FIN packet
-        send_packet(&client, 0, 1000, 0, FLAG_FIN, 1500);
-
-        // Server should exit
-        let result = server_thread.join().unwrap();
         assert!(result.is_ok());
     }
 

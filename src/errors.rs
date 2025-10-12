@@ -24,6 +24,6 @@ pub enum UdpOptError {
 
     #[error("Unexpected Stop  command ")]
     UnexpectedCommand,
-    #[error("Channel cloased ")]
-    ChannelClosed,
+    #[error("channel error")]
+    ChannelError,
 }
