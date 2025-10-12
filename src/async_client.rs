@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tokio::{net::UdpSocket, sync::broadcast::Receiver};
+use tokio::{net::UdpSocket, sync::mpsc::Receiver};
 
 use crate::{
     errors::UdpOptError,
@@ -78,12 +78,12 @@ impl AsyncUdpClient {
 
         // Wait for Start or Stop before beginning
         match self.control_rx.recv().await {
-            Ok(ClientCommand::Start) => {}
-            Ok(ClientCommand::Stop) => {
+            Some(ClientCommand::Start) => {}
+            Some(ClientCommand::Stop) => {
                 return Err(UdpOptError::UnexpectedCommand);
             }
 
-            Err(_) => {
+            None => {
                 return Err(UdpOptError::ChannelError);
             }
         }
@@ -153,7 +153,7 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use tokio::net::UdpSocket;
-    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
 
     // Helper function to create a test client
     async fn create_test_client(
@@ -161,9 +161,9 @@ mod tests {
         bitrate_bps: f64,
         payload_size: usize,
         timeout: Duration,
-    ) -> (AsyncUdpClient, broadcast::Sender<ClientCommand>) {
+    ) -> (AsyncUdpClient, mpsc::Sender<ClientCommand>) {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
-        let (tx, rx) = broadcast::channel(10);
+        let (tx, rx) = mpsc::channel(10);
 
         let client = AsyncUdpClient::new(addr, bitrate_bps, payload_size, timeout, rx)
             .await
@@ -184,7 +184,7 @@ mod tests {
         let bitrate_bps = 1_000_000.0; // 1 Mbps
         let payload_size = 1024;
         let timeout = Duration::from_secs(1);
-        let (_tx, rx) = broadcast::channel(10);
+        let (_tx, rx) = mpsc::channel(10);
 
         let result = AsyncUdpClient::new(addr, bitrate_bps, payload_size, timeout, rx).await;
         assert!(result.is_ok());
@@ -202,7 +202,7 @@ mod tests {
         let bitrate_bps = 1_000_000.0;
         let payload_size = 1024;
         let timeout = Duration::from_secs(1);
-        let (_tx, rx) = broadcast::channel(10);
+        let (_tx, rx) = mpsc::channel(10);
 
         let result = AsyncUdpClient::new(addr, bitrate_bps, payload_size, timeout, rx).await;
         assert!(result.is_err());
@@ -225,7 +225,7 @@ mod tests {
         assert!(!client_handle.is_finished());
 
         // Send start command
-        tx.send(ClientCommand::Start).unwrap();
+        tx.send(ClientCommand::Start).await.unwrap();
 
         let result = client_handle.await.unwrap();
         assert!(result.is_ok());
@@ -239,7 +239,7 @@ mod tests {
         let dest = server.local_addr().unwrap();
 
         // Send stop command before start
-        tx.send(ClientCommand::Stop).unwrap();
+        tx.send(ClientCommand::Stop).await.unwrap();
 
         let result = client.run(dest).await;
         assert!(result.is_err());
@@ -296,7 +296,7 @@ mod tests {
         });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        tx.send(ClientCommand::Start).unwrap();
+        tx.send(ClientCommand::Start).await.unwrap();
 
         let result = client.run(dest).await;
         assert!(result.is_ok());
@@ -313,7 +313,7 @@ mod tests {
         let server = create_test_server(20005).await;
         let dest = server.local_addr().unwrap();
 
-        tx.send(ClientCommand::Start).unwrap();
+        tx.send(ClientCommand::Start).await.unwrap();
 
         let start = Instant::now();
         let result = client.run(dest).await;
@@ -360,7 +360,7 @@ mod tests {
             sequences
         });
 
-        tx.send(ClientCommand::Start).unwrap();
+        tx.send(ClientCommand::Start).await.unwrap();
         client.run(dest).await.unwrap();
 
         let sequences = server_handle.await.unwrap();
@@ -378,8 +378,6 @@ mod tests {
             );
         }
     }
-
-   
 
     #[tokio::test]
     async fn test_client_with_zero_timeout() {
@@ -404,7 +402,7 @@ mod tests {
             received_fin
         });
 
-        tx.send(ClientCommand::Start).unwrap();
+        tx.send(ClientCommand::Start).await.unwrap();
         let result = client.run(dest).await;
 
         assert!(result.is_ok());

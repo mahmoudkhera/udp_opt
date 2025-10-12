@@ -78,8 +78,6 @@ impl UdpHeader {
     }
 }
 
-
-
 /// Tracks UDP statistics and state for a connection
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct UdpData {

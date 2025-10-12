@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate:: utils::net_utils::IntervalResult;
+use crate::utils::net_utils::IntervalResult;
 
 pub fn print_result(test_result: &IntervalResult) {
     let elapsed = test_result.time.as_secs_f64();

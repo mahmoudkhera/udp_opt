@@ -74,6 +74,7 @@ impl UdpServer {
             .sock
             .recv(&mut buf)
             .map_err(|e| UdpOptError::RecvFailed(e))?;
+        println!("recive command");
 
         let mut calc_instat = Instant::now();
         let calc_interval = Duration::from_millis(200);

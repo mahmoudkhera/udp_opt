@@ -2,9 +2,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use tokio::{
     net::UdpSocket,
-    sync::{
-        broadcast::{Receiver, error::TryRecvError},
-    },
+    sync::mpsc::{Receiver, error::TryRecvError},
     time::Instant,
 };
 
@@ -52,11 +50,11 @@ impl AsyncUdpServer {
 
         // Wait for Start or Stop before beginning
         match self.control_rx.recv().await {
-            Ok(ServerCommand::Start) => {}
-            Ok(ServerCommand::Stop) => {
+            Some(ServerCommand::Start) => {}
+            Some(ServerCommand::Stop) => {
                 return Err(UdpOptError::UnexpectedCommand);
             }
-            Err(_) => {
+            None => {
                 return Err(UdpOptError::ChannelError);
             }
         }
@@ -125,23 +123,19 @@ impl AsyncUdpServer {
     }
 }
 
-
-
-
-
 #[cfg(test)]
 mod tests {
     use crate::utils::udp_data::FLAG_DATA;
 
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
-    use tokio::sync::broadcast;
+    use tokio::sync::mpsc;
 
     // Helper function to create a test server
-    async fn create_test_server(port: u16) -> (AsyncUdpServer, broadcast::Sender<ServerCommand>) {
+    async fn create_test_server(port: u16) -> (AsyncUdpServer, mpsc::Sender<ServerCommand>) {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
         let interval = Duration::from_secs(1);
-        let (tx, rx) = broadcast::channel(10);
+        let (tx, rx) = mpsc::channel(10);
 
         let server = AsyncUdpServer::new(addr, interval, rx)
             .await
@@ -167,7 +161,7 @@ mod tests {
     async fn test_server_creation() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9001);
         let interval = Duration::from_secs(1);
-        let (_tx, rx) = broadcast::channel(10);
+        let (_tx, rx) = mpsc::channel(10);
 
         let result = AsyncUdpServer::new(addr, interval, rx).await;
         assert!(result.is_ok());
@@ -178,7 +172,7 @@ mod tests {
         // Try to bind to an invalid address
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)), 9002);
         let interval = Duration::from_secs(1);
-        let (_tx, rx) = broadcast::channel(10);
+        let (_tx, rx) = mpsc::channel(10);
 
         let result = AsyncUdpServer::new(addr, interval, rx).await;
         assert!(result.is_err());
@@ -195,7 +189,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Send start command
-        tx.send(ServerCommand::Start).unwrap();
+        tx.send(ServerCommand::Start).await.unwrap();
 
         // Send a FIN packet to stop the server
         let client = create_client(9003).await;
@@ -203,7 +197,7 @@ mod tests {
         packet[12] = FLAG_DATA as u8; // Set FIN flag in header
         client.send(&packet).await.unwrap();
 
-        tx.send(ServerCommand::Stop).unwrap();
+        tx.send(ServerCommand::Stop).await.unwrap();
 
         let result = server_handle.await.unwrap();
 
@@ -216,7 +210,7 @@ mod tests {
         let (mut server, tx) = create_test_server(9004).await;
 
         // Send stop command before start
-        tx.send(ServerCommand::Stop).unwrap();
+        tx.send(ServerCommand::Stop).await.unwrap();
 
         let result = server.run().await;
         assert!(result.is_err());
@@ -245,7 +239,7 @@ mod tests {
         let server_handle = tokio::spawn(async move { server.run().await });
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        tx.send(ServerCommand::Start).unwrap();
+        tx.send(ServerCommand::Start).await.unwrap();
 
         let client = create_client(9008).await;
 
@@ -265,6 +259,4 @@ mod tests {
         assert!(result.is_ok());
         assert!(result.unwrap().unwrap().is_ok());
     }
-
-   
 }

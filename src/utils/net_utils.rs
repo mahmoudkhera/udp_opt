@@ -33,7 +33,7 @@ pub enum ClientCommand {
     Stop,
 }
 
-pub (crate)fn interval_per_packet(paylod: usize, bitrate: f64) -> Duration {
+pub(crate) fn interval_per_packet(paylod: usize, bitrate: f64) -> Duration {
     let bits_per_packet = (paylod * 8) as f64;
     let packet_per_second = (bitrate / bits_per_packet).max(1.0);
 

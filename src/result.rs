@@ -1,5 +1,5 @@
-use utils::net_utils::IntervalResult;
 use std::time::Duration;
+use utils::net_utils::IntervalResult;
 
 use crate::utils;
 
@@ -123,8 +123,8 @@ pub fn median_f64(v: &mut [f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use utils::net_utils::IntervalResult;
     use std::time::Duration;
+    use utils::net_utils::IntervalResult;
 
     // Helper function to create a test interval
     fn create_interval(
