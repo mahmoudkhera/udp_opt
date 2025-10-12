@@ -1,21 +1,21 @@
 use std::time::Instant;
 
-use crate::server::TestResult;
+use crate:: utils::net_utils::IntervalResult;
 
-pub fn print_result(test_result: &TestResult) {
+pub fn print_result(test_result: &IntervalResult) {
     let elapsed = test_result.time.as_secs_f64();
     let mbps = if elapsed > 0.0 {
-        (test_result.result.bytes as f64 * 8.0) / elapsed / 1_000_000.0
+        (test_result.bytes as f64 * 8.0) / elapsed / 1_000_000.0
     } else {
         0.0
     };
     println!(
         " Elapsed {:.2}s | Recv {} pkts | Lost {} | OOO {} | Jitter {:.3} ms | Rate {:.3} Mbps",
         elapsed,
-        test_result.result.received,
-        test_result.result.lost,
-        test_result.result.out_of_order,
-        test_result.result.jitter_ms,
+        test_result.received,
+        test_result.lost,
+        test_result.out_of_order,
+        test_result.jitter_ms,
         mbps
     );
 }

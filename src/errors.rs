@@ -1,4 +1,4 @@
-use std::{io, net::AddrParseError, sync::mpsc::RecvError, time::Duration};
+use std::{io, net::AddrParseError, time::Duration};
 
 use thiserror::Error;
 
@@ -24,7 +24,6 @@ pub enum UdpOptError {
 
     #[error("Unexpected Stop  command ")]
     UnexpectedCommand,
-
     #[error("Channel cloased ")]
-    ChannelClosed
+    ChannelClosed,
 }

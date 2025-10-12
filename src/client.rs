@@ -12,16 +12,13 @@ use std::{
 
 use crate::{
     errors::UdpOptError,
-    utils::random_utils::RandomToSend,
-    utils::udp_data::{FLAG_DATA, FLAG_FIN, UdpHeader, now_micros},
+    utils::{
+        net_utils::{ClientCommand, interval_per_packet},
+        random_utils::RandomToSend,
+        udp_data::{FLAG_DATA, FLAG_FIN, UdpHeader, now_micros},
+    },
 };
 
-/// Commands that control the UDP client behavior.
-#[derive(Debug, Clone)]
-pub enum ClientCommand {
-    Start,
-    Stop,
-}
 #[derive(Debug)]
 pub struct UdpClient {
     sock: UdpSocket,
@@ -81,7 +78,7 @@ impl UdpClient {
             .connect(&dest)
             .map_err(UdpOptError::ConnectFailed)?;
 
-        let interval_per_packet = ipp(self.payload_size, self.bitrate_bps);
+        let ipp = interval_per_packet(self.payload_size, self.bitrate_bps);
 
         let mut seq: u64 = 0;
 
@@ -116,7 +113,7 @@ impl UdpClient {
                 .map_err(|e| UdpOptError::SendFailed(e))?;
 
             seq += 1;
-            time_to_next_target(seq, interval_per_packet, start);
+            time_to_next_target(seq, ipp, start);
         }
 
         // FIN
@@ -137,13 +134,6 @@ impl UdpClient {
 }
 
 //helper function
-
-fn ipp(paylod: usize, bitrate: f64) -> Duration {
-    let bits_per_packet = (paylod * 8) as f64;
-    let packet_per_second = (bitrate / bits_per_packet).max(1.0);
-
-    Duration::from_secs_f64(1.0 / packet_per_second)
-}
 
 #[inline]
 fn time_to_next_target(seq: u64, ipp: Duration, start: Instant) {
@@ -217,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_ipp_calculation() {
-        let interval = ipp(1500, 1_000_000.0);
+        let interval = interval_per_packet(1500, 1_000_000.0);
         assert!(interval.as_millis() >= 11 && interval.as_millis() <= 13);
     }
 

@@ -7,3 +7,4 @@ pub mod utils;
 // async part
 
 pub mod async_client;
+pub mod async_server;

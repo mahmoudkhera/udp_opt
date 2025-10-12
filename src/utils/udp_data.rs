@@ -9,6 +9,8 @@
 //!
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::utils::net_utils::IntervalResult;
+
 /// Size of the UDP header in bytes (seq + sec + usec + flags)
 pub(crate) const HEADER_SIZE: usize = 8 + 8 + 4 + 4; // 24 bytes
 
@@ -76,23 +78,7 @@ impl UdpHeader {
     }
 }
 
-/// Statistics for a given interval
-#[derive(Debug, Clone, Copy, Default)]
-pub struct IntervalResult {
-    /// Number of packets received
-    pub received: u64,
-    /// Number of packets lost
-    pub lost: u64,
-    /// Total bytes received
-    pub bytes: usize,
-    /// Jitter in milliseconds
-    pub jitter_ms: f64,
-    /// Number of out-of-order packets
-    pub out_of_order: u64,
-    /// Recommended bitrate (packets per second)
-    pub recommended_bitrate: u64,
-    pub time: Duration,
-}
+
 
 /// Tracks UDP statistics and state for a connection
 #[derive(Debug, Clone, Copy)]
@@ -219,7 +205,8 @@ impl UdpData {
 
     /// Returns interval statistics and resets them
 
-    pub(crate) fn get_interval_result(&mut self) -> IntervalResult {
+    pub(crate) fn get_interval_result(&mut self, iterval_time: Duration) -> IntervalResult {
+        self.interval_result.time = iterval_time;
         let r = std::mem::take(&mut self.interval_result);
         r
     }
@@ -433,7 +420,7 @@ mod tests {
         data.interval_result.out_of_order = 3;
 
         // Get and reset
-        let result = data.get_interval_result();
+        let result = data.get_interval_result(Duration::from_secs(1));
 
         // Check returned values
         assert_eq!(result.received, 100);
