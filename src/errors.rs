@@ -21,9 +21,11 @@ pub enum UdpOptError {
     InvalidAddress(#[from] AddrParseError),
     #[error("Get random for the test  faild ")]
     FailToGetRandom(io::Error),
+    #[error("Socket receive reaches timeout")]
+    SocketTimeout,
 
     #[error("Unexpected Stop  command ")]
     UnexpectedCommand,
     #[error("channel error")]
-    ChannelError,
+    ChannelClosed,
 }

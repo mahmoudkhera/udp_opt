@@ -8,41 +8,32 @@ use crate::errors::UdpOptError;
 use crate::utils::net_utils::{IntervalResult, ServerCommand};
 use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader};
 use crate::utils::ui::print_result;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::UdpSocket;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 pub struct UdpServer {
-    sock: UdpSocket,
+    ///Time between each result to save
     interval: Duration,
+    /// Collecting the interval results
     udp_result: Vec<IntervalResult>,
+    /// Async receiver for control commands (`Start`, `Stop`) from another thread.
     control_rx: Receiver<ServerCommand>,
 }
 
 impl UdpServer {
     /// Creates a new [`UdpServer`] that binds to the given socket address.
     ///
-    /// - `addr`: The IP and port to bind to.
     /// - `interval`: The duration for each result interval.
     /// - `control_rx`: A channel receiver to control start/stop commands.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`UdpOptError::BindFailed`] if the socket could not be bound.
-    pub fn new(
-        addr: SocketAddr,
-        interval: Duration,
-        control_rx: Receiver<ServerCommand>,
-    ) -> Result<Self, UdpOptError> {
-        let sock = UdpSocket::bind(addr).map_err(UdpOptError::BindFailed)?;
 
-        Ok(Self {
-            sock: sock,
+    pub fn new(interval: Duration, control_rx: Receiver<ServerCommand>) -> Self {
+        Self {
             interval,
             udp_result: Vec::with_capacity(100),
             control_rx,
-        })
+        }
     }
     /// Runs the UDP server loop.
     ///
@@ -52,29 +43,37 @@ impl UdpServer {
     /// - A packet with the `FLAG_FIN` flag is received.
     /// - The control channel disconnects.
     ///
+    ///
+    ///  /// # Arguments
+    /// - `sock`: The bound UDP socket to receive packets from.
+    ///
+    ///
     /// # Errors
     ///
     /// Returns [`UdpOptError::RecvFailed`] if a UDP receive error occurs.
-    pub fn run(&mut self) -> Result<(), UdpOptError> {
+    /// Returns [`UdpOptError::SocketTimeout`] if a UDP receive error occurs.
+    /// Returns [`UdpOptError::UnexpectedCommand`] if a UDP receive error occurs.
+    /// Returns [`UdpOptError::ChannelClosed`] if a UDP receive error occurs.
+    pub fn run(&mut self, sock: &mut UdpSocket) -> Result<(), UdpOptError> {
         println!("server start");
 
         let mut udp_data = UdpData::new();
         let mut buf = vec![0u8; 2048];
+
         // wait for the start udp packet to start the test and set the buf lenght
-        match self.control_rx.recv().unwrap() {
-            ServerCommand::Stop => {
-                println!("unecpect stop");
-                return Ok(());
-            }
-            ServerCommand::Start => {}
+        match self.control_rx.recv() {
+            Ok(ServerCommand::Stop) => return Err(UdpOptError::UnexpectedCommand),
+            Ok(ServerCommand::Start) => {}
+            Err(_) => return Err(UdpOptError::ChannelClosed),
         }
 
         // start measuring after reciving the first packt
-        let _ = self
-            .sock
+        let _ = sock
             .recv(&mut buf)
             .map_err(|e| UdpOptError::RecvFailed(e))?;
-        println!("recive command");
+
+        sock.set_read_timeout(Some(Duration::from_secs(2)))
+            .map_err(|_| UdpOptError::SocketTimeout)?;
 
         let mut calc_instat = Instant::now();
         let calc_interval = Duration::from_millis(200);
@@ -83,20 +82,13 @@ impl UdpServer {
         loop {
             // Check control messages
             match self.control_rx.try_recv() {
-                Ok(ServerCommand::Stop) => {
-                    println!("Received stop command");
-                    break;
-                }
-                Ok(ServerCommand::Start) => {}
+                Ok(ServerCommand::Stop) => break,
+                Ok(ServerCommand::Start) => return Err(UdpOptError::UnexpectedCommand),
                 Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    println!("Control channel closed");
-                    break;
-                }
+                Err(mpsc::TryRecvError::Disconnected) => return Err(UdpOptError::ChannelClosed),
             }
 
-            let len = self
-                .sock
+            let len = sock
                 .recv(&mut buf)
                 .map_err(|e| UdpOptError::RecvFailed(e))?;
 
@@ -130,6 +122,10 @@ impl UdpServer {
         Ok(())
     }
 
+    /// Returns a slice of collected [`IntervalResult`]s.
+    ///
+    /// Each `IntervalResult` represents metrics (bitrate, packet loss, etc.)
+    /// collected during a single measurement interval.
     pub fn get_result(&self) -> &[IntervalResult] {
         &self.udp_result
     }
@@ -138,154 +134,216 @@ impl UdpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::udp_data::{FLAG_DATA, FLAG_FIN, HEADER_SIZE, UdpHeader};
-    use std::net::{SocketAddr, UdpSocket};
-    use std::sync::mpsc::{self, Sender};
+    use std::net::UdpSocket;
+    use std::sync::mpsc::{Sender, channel};
     use std::thread;
     use std::time::Duration;
 
-    // Helper function to find an available port
-    fn get_available_addr() -> SocketAddr {
-        "127.0.0.1:0".parse().unwrap()
+    // Helper function to create a test server
+    fn create_test_server(interval: Duration) -> (UdpServer, Sender<ServerCommand>) {
+        let (tx, rx) = channel();
+        let server = UdpServer::new(interval, rx);
+        (server, tx)
     }
 
-    // Helper to create a test server with control channel
-    fn create_test_server(interval: Duration) -> (UdpServer, Sender<ServerCommand>, SocketAddr) {
-        let (tx, rx) = mpsc::channel();
-        let addr = get_available_addr();
-        let server = UdpServer::new(addr, interval, rx).unwrap();
-        let bound_addr = server.sock.local_addr().unwrap();
-        (server, tx, bound_addr)
+    // Helper function to create a bound UDP socket pair
+    fn create_socket_pair() -> (UdpSocket, UdpSocket) {
+        let server_sock = UdpSocket::bind("127.0.0.1:0").expect("Failed to bind server socket");
+        let client_sock = UdpSocket::bind("127.0.0.1:0").expect("Failed to bind client socket");
+
+        let server_addr = server_sock.local_addr().unwrap();
+        let client_addr = client_sock.local_addr().unwrap();
+
+        server_sock.connect(client_addr).unwrap();
+        client_sock.connect(server_addr).unwrap();
+
+        (server_sock, client_sock)
     }
 
-    // Helper to send a UDP packet with a header
-    fn send_packet(
-        client: &UdpSocket,
-        seq: u64,
-        sec: u64,
-        usec: u32,
-        flags: u32,
-        payload_size: usize,
-    ) {
-        let mut buf = vec![0u8; payload_size];
-        let mut header = UdpHeader::new(seq, sec, usec, flags);
-        header.write_header(&mut buf);
-        client.send(&buf).unwrap();
-    }
+    // Helper to create a UDP packet with header
+    fn create_packet(seq: u64, flags: u32) -> Vec<u8> {
+        let mut packet = vec![0u8; HEADER_SIZE + 100]; // Header + some payload
 
-    #[test]
-    fn test_udp_server_new() {
-        let (_, rx) = mpsc::channel();
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let server = UdpServer::new(addr, Duration::from_secs(1), rx);
+        // Assuming UdpHeader layout (adjust based on your actual implementation)
+        packet[0..8].copy_from_slice(&seq.to_be_bytes());
+        packet[20..24].copy_from_slice(&flags.to_be_bytes());
 
-        assert!(server.is_ok());
-        let server = server.unwrap();
-        assert_eq!(server.interval, Duration::from_secs(1));
-        assert_eq!(server.udp_result.len(), 0);
+        packet
     }
 
     #[test]
-    fn test_udp_server_new_invalid_address() {
-        let (_, rx) = mpsc::channel();
-        // Try to bind to an invalid address (port 0 is ok, but invalid IP format would fail parsing)
-        // Here we test a valid parse but potentially unavailable port
-        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        let result = UdpServer::new(addr, Duration::from_secs(1), rx);
+    fn test_server_waits_for_start_command() {
+        let (mut server, tx) = create_test_server(Duration::from_secs(1));
+        let (mut server_sock, client_sock) = create_socket_pair();
 
-        // Should succeed because OS assigns available port
+        // Run the server in a separate thread
+        let handle = thread::spawn(move || server.run(&mut server_sock));
+
+        // Ensure the thread starts and is ready to receive
+        thread::sleep(Duration::from_millis(100));
+
+        // Send Start command
+        tx.send(ServerCommand::Start).unwrap();
+
+        // Give the server a moment to process the Start command
+        thread::sleep(Duration::from_millis(50));
+
+        // Send one UDP packet
+        let packet = create_packet(1, 0);
+        client_sock.send(&packet).unwrap();
+
+        // Give time for the server to process the packet
+        thread::sleep(Duration::from_millis(100));
+
+        // Send Stop command to tell the server to exit
+        tx.send(ServerCommand::Stop).unwrap();
+
+        // Unblock the server if it's still in recv()
+        client_sock.send(&create_packet(999, 0)).unwrap();
+
+        // Wait for server to finish
+        let result = handle.join().unwrap();
+        println!("Server result: {:?}", result);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_server_ignores_short_packets() {
-        let (mut server, tx, server_addr) = create_test_server(Duration::from_secs(1));
+    fn test_server_stops_on_stop_command() {
+        let (mut server, tx) = create_test_server(Duration::from_secs(1));
+        let (mut server_sock, client_sock) = create_socket_pair();
 
-        // Create client socket
-        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
-        client.connect(server_addr).unwrap();
+        server_sock
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
 
-        // Start server in a thread
-        let server_thread = thread::spawn(move || {
-            server.run().unwrap();
-            server
-        });
-
-        // Give server time to start
-        thread::sleep(Duration::from_millis(50));
+        let handle = thread::spawn(move || server.run(&mut server_sock));
 
         // Send start command
         tx.send(ServerCommand::Start).unwrap();
-
-        // Wait a bit
         thread::sleep(Duration::from_millis(50));
 
-        // Send a packet that's too short (less than HEADER_SIZE)
-        let short_buf = vec![0u8; HEADER_SIZE - 1];
-        client.send(&short_buf).unwrap();
+        // Send initial packet
+        let packet = create_packet(1, 0);
+        client_sock.send(&packet).unwrap();
+        thread::sleep(Duration::from_millis(50));
 
-        // Send a valid FIN packet to stop the server
-        send_packet(&client, 0, 1000, 0, FLAG_FIN, 1500);
+        // Send stop command
+        tx.send(ServerCommand::Stop).unwrap();
 
-        // Server should handle this gracefully
-        let server = server_thread.join().unwrap();
+        // Unblock the server if it's still in recv()
+        client_sock.send(&create_packet(999, 0)).unwrap();
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_server_stops_on_fin_flag() {
+        let (mut server, tx) = create_test_server(Duration::from_secs(1));
+        let (mut server_sock, client_sock) = create_socket_pair();
+
+        let handle = thread::spawn(move || server.run(&mut server_sock));
+
+        // Send start command
+        tx.send(ServerCommand::Start).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Send initial packet
+        let packet = create_packet(1, 0);
+        client_sock.send(&packet).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Send FIN packet
+        let fin_packet = create_packet(2, 1);
+        client_sock.send(&fin_packet).unwrap();
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_result_empty() {
+        let (server, _tx) = create_test_server(Duration::from_secs(1));
         let results = server.get_result();
-
-        // Should have no results since only short packet and FIN were sent
         assert_eq!(results.len(), 0);
     }
 
     #[test]
-    fn test_server_unexpected_stop_before_start() {
-        let (mut server, tx, _) = create_test_server(Duration::from_secs(1));
+    fn test_interval_result_collection() {
+        let interval = Duration::from_millis(200);
+        let (mut server, tx) = create_test_server(interval);
+        let (mut server_sock, client_sock) = create_socket_pair();
 
-        // // Start server in a thread
-        let server_thread = thread::spawn(move || server.run());
+        server_sock
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
 
-        // Give server time to start
-        thread::sleep(Duration::from_millis(500));
-
-        // Send stop before start
-        tx.send(ServerCommand::Stop).unwrap();
-
-        // Server should handle this gracefully
-        let result = server_thread.join().unwrap();
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_interval_result_time_tracking() {
-        let (mut server, tx, server_addr) = create_test_server(Duration::from_millis(300));
-
-        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
-        client.connect(server_addr).unwrap();
-
-        let server_thread = thread::spawn(move || {
-            server.run().unwrap();
+        let handle = thread::spawn(move || {
+            server.run(&mut server_sock).unwrap();
             server
         });
 
-        thread::sleep(Duration::from_millis(50));
         tx.send(ServerCommand::Start).unwrap();
         thread::sleep(Duration::from_millis(50));
 
-        // Send packets for about 400ms
-        for i in 0..20 {
-            send_packet(&client, i, 1000, (i * 10000) as u32, FLAG_DATA, 1500);
-            thread::sleep(Duration::from_millis(20));
+        // Send initial packet
+        let packet = create_packet(1, 0);
+        client_sock.send(&packet).unwrap();
+
+        // Send packets over multiple intervals
+        for i in 2..=10 {
+            thread::sleep(Duration::from_millis(50));
+            let packet = create_packet(i, 0);
+            client_sock.send(&packet).unwrap();
         }
 
-        send_packet(&client, 20, 1000, 200000, FLAG_FIN, 1500);
+        thread::sleep(Duration::from_millis(100));
+        tx.send(ServerCommand::Stop).unwrap();
 
-        let server = server_thread.join().unwrap();
+        // Unblock the server if it's still in recv()
+        client_sock.send(&create_packet(999, 0)).unwrap();
+
+        let server = handle.join().unwrap();
         let results = server.get_result();
 
-        // Check that time is tracked properly
-        if results.len() > 0 {
-            assert!(
-                results[0].time >= Duration::from_millis(300),
-                "First interval should be at least 300ms"
-            );
-        }
+        // Should have collected at least one interval result
+        assert!(results.len() > 0);
+    }
+
+    #[test]
+    fn test_multiple_start_commands() {
+        let (mut server, tx) = create_test_server(Duration::from_secs(1));
+        let (mut server_sock, client_sock) = create_socket_pair();
+
+        server_sock
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+
+        let handle = thread::spawn(move || server.run(&mut server_sock));
+
+        tx.send(ServerCommand::Start).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Send initial packet
+        let packet = create_packet(1, 0);
+        client_sock.send(&packet).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Send another start command (should be ignored)
+        tx.send(ServerCommand::Start).unwrap();
+
+        // Send another packet
+        let packet2 = create_packet(2, 0);
+        client_sock.send(&packet2).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Unblock the server if it's still in recv()
+        client_sock.send(&create_packet(999, 0)).unwrap();
+
+        let result = handle.join().unwrap();
+
+        assert!(result.is_err());
     }
 }

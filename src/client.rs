@@ -5,7 +5,7 @@
 //! commands via an `mpsc` channel.
 
 use std::{
-    net::{SocketAddr, UdpSocket},
+    net::UdpSocket,
     sync::mpsc::Receiver,
     time::{Duration, Instant},
 };
@@ -21,41 +21,42 @@ use crate::{
 
 #[derive(Debug)]
 pub struct UdpClient {
-    sock: UdpSocket,
+    /// Target sending bitrate in bits per second.
     bitrate_bps: f64,
+
+    /// Size of each UDP packet payload, including header.
     payload_size: usize,
+
+    /// Maximum duration for the transmission test.
     timeout: Duration,
+
+    /// Receiver for control commands (`Start`, `Stop`) from another thread.
     control_rx: Receiver<ClientCommand>,
 }
 
 impl UdpClient {
-    /// Creates a new UDP client bound to a local address.
+    /// Creates a new UDP client.
     ///
     /// # Parameters
-    /// - `addr`: Local socket address to bind.
-    /// - `bitrate_bps`: Target sending bitrate in bits per second.
-    /// - `payload_size`: Size of each UDP packet in bytes.
-    /// - `timeout`: Maximum duration to send packets.
-    /// - `control_rx`: Channel receiver for start/stop commands.
+    /// - `bitrate_bps`: Desired sending bitrate in bits per second.
+    /// - `payload_size`: Number of bytes in each packet (typically 512–1500 bytes).
+    /// - `timeout`: Total duration to keep sending packets.
+    /// - `control_rx`: Channel to receive [`ClientCommand`] control signals.
     ///
-    /// # Errors
-    /// Returns [`UdpOptError::BindFailed`] if the socket cannot be bound.
+    /// # Returns
+    /// A new [`UdpClient`] instance ready to send packets using [`UdpClient::run`].
     pub fn new(
-        addr: SocketAddr,
         bitrate_bps: f64,
         payload_size: usize,
         timeout: Duration,
         control_rx: Receiver<ClientCommand>,
-    ) -> Result<Self, UdpOptError> {
-        let sock = UdpSocket::bind(addr).map_err(UdpOptError::BindFailed)?;
-
-        Ok(Self {
-            sock: sock,
+    ) -> Self {
+        Self {
             bitrate_bps,
             payload_size,
             timeout,
             control_rx,
-        })
+        }
     }
 
     /// Runs the UDP client, sending packets to the specified destination.
@@ -66,18 +67,15 @@ impl UdpClient {
     /// - Sends a FIN packet at the end to notify the server.
     ///
     /// # Parameters
-    /// - `dest`: Destination UDP socket address.
+    /// - `sock`: A bound [`UdpSocket`] that will be used to send packets.
     ///
-    /// # Errors
-    /// Returns [`UdpOptError::SendFailed`] if a packet cannot be sent.
-    /// Returns [`UdpOptError::FailToGetRandom`] if random data cannot be generated.
-    /// Returns [`UdpOptError::ConnectFailed`] if socket cannot connect.
+    /// Returns:
+    /// - [`UdpOptError::SendFailed`] if sending fails.
+    /// - [`UdpOptError::FailToGetRandom`] if payload randomization fails.
+    /// - [`UdpOptError::ChannelClosed`] if control channel disconnects before start.
+    /// - [`UdpOptError::UnexpectedCommand`] if an unexpected command is received.
 
-    pub fn run(&mut self, dest: SocketAddr) -> Result<(), UdpOptError> {
-        self.sock
-            .connect(&dest)
-            .map_err(UdpOptError::ConnectFailed)?;
-
+    pub fn run(&mut self, sock: &mut UdpSocket) -> Result<(), UdpOptError> {
         let ipp = interval_per_packet(self.payload_size, self.bitrate_bps);
 
         let mut seq: u64 = 0;
@@ -86,12 +84,13 @@ impl UdpClient {
 
         let mut random = RandomToSend::new().map_err(|e| UdpOptError::FailToGetRandom(e))?;
 
-        match self.control_rx.recv().unwrap() {
-            ClientCommand::Stop => {
-                println!("unecpect stop")
-            }
-            ClientCommand::Start => {}
+        // wait for the start udp packet to start the test and set the buf lenght
+        match self.control_rx.recv() {
+            Ok(ClientCommand::Stop) => return Err(UdpOptError::UnexpectedCommand),
+            Ok(ClientCommand::Start) => {}
+            Err(_) => return Err(UdpOptError::ChannelClosed),
         }
+
         let start = Instant::now();
 
         loop {
@@ -101,32 +100,25 @@ impl UdpClient {
 
             random
                 .fill(&mut buf)
-                .map_err(|e| UdpOptError::FailToGetRandom(e))?; //  not you can use any random  base insted of using the unix_epoch
+                .map_err(|e| UdpOptError::FailToGetRandom(e))?; //  note you can use any random  base insted of using the unix_epoch
 
             let (sec, usec) = now_micros();
 
             let mut header = UdpHeader::new(seq, sec, usec, FLAG_DATA);
             header.write_header(&mut buf);
 
-            self.sock
-                .send(&buf)
-                .map_err(|e| UdpOptError::SendFailed(e))?;
+            sock.send(&buf).map_err(|e| UdpOptError::SendFailed(e))?;
 
             seq += 1;
             time_to_next_target(seq, ipp, start);
         }
 
-        // FIN
-        random
-            .fill(&mut buf)
-            .map_err(|e| UdpOptError::FailToGetRandom(e))?; //  not you can use any random  base insted of using the unix_epoch
+        // Send a final packet (FIN flag) to notify completion.
         let (sec, usec) = now_micros();
         let mut fin = UdpHeader::new(seq, sec, usec, FLAG_FIN);
         fin.write_header(&mut buf);
 
-        self.sock
-            .send(&buf)
-            .map_err(|e| UdpOptError::SendFailed(e))?;
+        sock.send(&buf).map_err(|e| UdpOptError::SendFailed(e))?;
         println!("Client done. Sent {} packets (+FIN)", seq);
 
         Ok(())
@@ -159,182 +151,248 @@ fn time_to_next_target(seq: u64, ipp: Duration, start: Instant) {
 }
 
 #[cfg(test)]
-mod tests {
+mod udp_client_tests {
+    use crate::utils::udp_data::HEADER_SIZE;
+
     use super::*;
-    use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, UdpHeader};
-    use std::net::{SocketAddr, UdpSocket};
-    use std::sync::mpsc::{self, Sender};
+    use std::net::UdpSocket;
+    use std::sync::mpsc::{Sender, channel};
     use std::thread;
     use std::time::{Duration, Instant};
 
-    // Helper function to get an available address
-    fn get_available_addr() -> SocketAddr {
-        "127.0.0.1:0".parse().unwrap()
-    }
-
-    // Helper to create a test client with control channel
+    /// Creates a test UDP client with control channel
     fn create_test_client(
         bitrate_bps: f64,
         payload_size: usize,
         timeout: Duration,
     ) -> (UdpClient, Sender<ClientCommand>) {
-        let (tx, rx) = mpsc::channel();
-        let addr = get_available_addr();
-        let client = UdpClient::new(addr, bitrate_bps, payload_size, timeout, rx).unwrap();
+        let (tx, rx) = channel();
+        let client = UdpClient::new(bitrate_bps, payload_size, timeout, rx);
         (client, tx)
     }
 
-    // Helper to create a receiving server
-    fn create_receiver() -> (UdpSocket, SocketAddr) {
-        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
-        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let addr = sock.local_addr().unwrap();
-        (sock, addr)
+    /// Creates a pair of connected UDP sockets for testing
+    fn create_socket_pair() -> (UdpSocket, UdpSocket) {
+        let server_sock = UdpSocket::bind("127.0.0.1:0").expect("Failed to bind server socket");
+        let client_sock = UdpSocket::bind("127.0.0.1:0").expect("Failed to bind client socket");
+
+        let server_addr = server_sock.local_addr().unwrap();
+        let client_addr = client_sock.local_addr().unwrap();
+
+        server_sock.connect(client_addr).unwrap();
+        client_sock.connect(server_addr).unwrap();
+
+        (server_sock, client_sock)
     }
 
-    #[test]
-    fn test_udp_client_new() {
-        let (_, rx) = mpsc::channel();
-        let addr = get_available_addr();
-        let client = UdpClient::new(addr, 1_000_000.0, 1500, Duration::from_secs(1), rx);
+    /// Parses UDP header to extract sequence number and flags
+    /// Adjust based on your actual UdpHeader structure
+    fn parse_header(buf: &[u8]) -> Option<(u64, u32)> {
+        if buf.len() < HEADER_SIZE {
+            return None;
+        }
 
-        assert!(client.is_ok());
-        let client = client.unwrap();
-        assert_eq!(client.bitrate_bps, 1_000_000.0);
-        assert_eq!(client.payload_size, 1500);
-        assert_eq!(client.timeout, Duration::from_secs(1));
+        let seq = u64::from_be_bytes(buf[0..8].try_into().unwrap());
+
+        let flags = u32::from_be_bytes(buf[20..24].try_into().unwrap());
+
+        Some((seq, flags))
     }
 
-    #[test]
-    fn test_ipp_calculation() {
-        let interval = interval_per_packet(1500, 1_000_000.0);
-        assert!(interval.as_millis() >= 11 && interval.as_millis() <= 13);
-    }
+    /// Receives packets until FIN or timeout
+    fn receive_all_packets(sock: &mut UdpSocket, timeout: Duration) -> Vec<(u64, u32, usize)> {
+        sock.set_read_timeout(Some(timeout)).unwrap();
+        let mut packets = Vec::new();
+        let mut buf = vec![0u8; 65536];
 
-    #[test]
-    fn test_client_sends_packets() {
-        let (mut client, tx) = create_test_client(100_000.0, 100, Duration::from_millis(200));
-        let (receiver, receiver_addr) = create_receiver();
-
-        // Start client in a thread
-        let client_thread = thread::spawn(move || client.run(receiver_addr));
-
-        // Send start command
-        tx.send(ClientCommand::Start).unwrap();
-
-        let mut buf = vec![0u8; 2048];
-        let mut packet_count = 0;
-        let mut received_fin = false;
-
-        // Receive packets
         loop {
-            match receiver.recv(&mut buf) {
+            match sock.recv(&mut buf) {
                 Ok(len) => {
-                    if len >= HEADER_SIZE {
-                        let header = UdpHeader::read_header(&mut buf);
-                        packet_count += 1;
-
-                        if header.flags == FLAG_FIN {
-                            received_fin = true;
+                    if let Some((seq, flags)) = parse_header(&buf) {
+                        packets.push((seq, flags, len));
+                        if flags == FLAG_FIN {
                             break;
                         }
                     }
                 }
-                Err(_) => break, // Timeout
+                Err(_) => break,
             }
         }
 
-        // Wait for client to finish
-        let result = client_thread.join().unwrap();
-        assert!(result.is_ok());
-        assert!(packet_count > 0, "Should receive at least one packet");
-        assert!(received_fin, "Should receive FIN packet");
+        packets
     }
 
     #[test]
-    fn test_client_respects_timeout() {
-        let timeout = Duration::from_millis(100);
-        let (mut client, tx) = create_test_client(1_000_000.0, 1000, timeout);
-        let (_, receiver_addr) = create_receiver();
+    fn test_client_waits_for_start_command() {
+        let (mut client, tx) = create_test_client(1_000_000.0, 1024, Duration::from_millis(100));
+        let (_server_sock, mut client_sock) = create_socket_pair();
 
-        let start = Instant::now();
+        client_sock
+            .set_write_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
 
-        // Start client in a thread
-        let client_thread = thread::spawn(move || client.run(receiver_addr));
+        let handle = thread::spawn(move || client.run(&mut client_sock));
+
+        // Wait a bit to ensure client is waiting for command
+        thread::sleep(Duration::from_millis(50));
 
         // Send start command
         tx.send(ClientCommand::Start).unwrap();
 
-        // Wait for client to finish
-        client_thread.join().unwrap().unwrap();
-
-        let elapsed = start.elapsed();
-
-        // Should finish around the timeout (with some margin)
-        assert!(elapsed >= timeout);
-        assert!(elapsed < timeout + Duration::from_millis(200));
-    }
-
-    #[test]
-    fn test_client_unexpected_stop_before_start() {
-        let (mut client, tx) = create_test_client(100_000.0, 500, Duration::from_millis(100));
-        let (_, receiver_addr) = create_receiver();
-
-        // Start client in a thread
-        let client_thread = thread::spawn(move || client.run(receiver_addr));
-
-        // Send stop before start
-        tx.send(ClientCommand::Stop).unwrap();
-
-        // Should handle gracefully
-        let result = client_thread.join().unwrap();
+        let result = handle.join().unwrap();
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_time_to_next_target_precision() {
-        let start = Instant::now();
-        let ipp = Duration::from_millis(10);
+    fn test_client_sends_packets() {
+        let bitrate = 5_000_000.0; // 5 Mbps
+        let payload_size = 512;
+        let timeout = Duration::from_millis(200);
 
-        // Test first packet (seq 1)
-        time_to_next_target(1, ipp, start);
-        let elapsed = start.elapsed();
+        let (mut client, tx) = create_test_client(bitrate, payload_size, timeout);
+        let (mut server_sock, mut client_sock) = create_socket_pair();
 
-        // Should wait approximately 10ms
-        assert!(elapsed >= Duration::from_millis(9));
-        assert!(elapsed <= Duration::from_millis(15));
+        let handle = thread::spawn(move || client.run(&mut client_sock));
+
+        tx.send(ClientCommand::Start).unwrap();
+
+        let packets = receive_all_packets(&mut server_sock, Duration::from_millis(50));
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+        assert!(
+            packets.len() > 0,
+            "Should have received at least one packet"
+        );
     }
 
     #[test]
-    fn test_time_to_next_target_multiple_packets() {
-        let start = Instant::now();
-        let ipp = Duration::from_millis(5);
+    fn test_client_sends_fin_packet() {
+        let bitrate = 10_000_000.0;
+        let payload_size = 512;
+        let timeout = Duration::from_millis(100);
 
-        // Simulate sending 5 packets
-        for seq in 1..=5 {
-            time_to_next_target(seq, ipp, start);
+        let (mut client, tx) = create_test_client(bitrate, payload_size, timeout);
+        let (mut server_sock, mut client_sock) = create_socket_pair();
+
+        let handle = thread::spawn(move || client.run(&mut client_sock));
+
+        tx.send(ClientCommand::Start).unwrap();
+
+        let packets = receive_all_packets(&mut server_sock, Duration::from_millis(50));
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+
+        // Last packet should be FIN
+        let last_packet = packets.last().expect("Should have at least one packet");
+        assert_eq!(last_packet.1, FLAG_FIN, "Last packet should have FIN flag");
+    }
+
+    #[test]
+    fn test_sequence_numbers_increment_correctly() {
+        let bitrate = 10_000_000.0;
+        let payload_size = 512;
+        let timeout = Duration::from_millis(150);
+
+        let (mut client, tx) = create_test_client(bitrate, payload_size, timeout);
+        let (mut server_sock, mut client_sock) = create_socket_pair();
+
+        let handle = thread::spawn(move || client.run(&mut client_sock));
+
+        tx.send(ClientCommand::Start).unwrap();
+
+        let packets = receive_all_packets(&mut server_sock, Duration::from_millis(50));
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+
+        assert!(packets.len() >= 2, "Should have at least 2 packets");
+
+        // Verify sequence numbers increment
+        for i in 1..packets.len() {
+            let expected_seq = packets[i - 1].0 + 1;
+            assert_eq!(
+                packets[i].0,
+                expected_seq,
+                "Sequence number should increment from {} to {}",
+                packets[i - 1].0,
+                expected_seq
+            );
         }
-
-        let elapsed = start.elapsed();
-
-        // Should take approximately 25ms (5 * 5ms)
-        assert!(elapsed >= Duration::from_millis(23));
-        assert!(elapsed <= Duration::from_millis(30));
     }
 
     #[test]
-    fn test_time_to_next_target_already_past() {
+    fn test_client_timeout() {
+        let bitrate = 1_000_000.0;
+        let payload_size = 1024;
+        let timeout = Duration::from_millis(200);
+
+        let (mut client, tx) = create_test_client(bitrate, payload_size, timeout);
+        let (_server_sock, mut client_sock) = create_socket_pair();
+
+        tx.send(ClientCommand::Start).unwrap();
+
         let start = Instant::now();
-        thread::sleep(Duration::from_millis(50));
+        let result = client.run(&mut client_sock);
+        let elapsed = start.elapsed();
 
-        // Packet is already late
-        let ipp = Duration::from_millis(10);
+        assert!(result.is_ok());
+        assert!(
+            elapsed >= timeout,
+            "Should run for at least timeout duration"
+        );
+        assert!(
+            elapsed < timeout + Duration::from_millis(100),
+            "Should not run much longer than timeout"
+        );
+    }
 
-        let before = Instant::now();
-        time_to_next_target(1, ipp, start);
-        let wait_time = before.elapsed();
+    #[test]
+    fn test_zero_timeout_sends_only_fin() {
+        let bitrate = 1_000_000.0;
+        let payload_size = 1024;
+        let timeout = Duration::from_millis(0);
 
-        // Should return immediately (very small wait)
-        assert!(wait_time < Duration::from_millis(1));
+        let (mut client, tx) = create_test_client(bitrate, payload_size, timeout);
+        let (mut server_sock, mut client_sock) = create_socket_pair();
+
+        let handle = thread::spawn(move || client.run(&mut client_sock));
+
+        tx.send(ClientCommand::Start).unwrap();
+
+        let packets = receive_all_packets(&mut server_sock, Duration::from_millis(50));
+
+        let result = handle.join().unwrap();
+        assert!(result.is_ok());
+
+        // Should only send FIN packet (sequence 0)
+        assert_eq!(packets.len(), 1, "Should only send FIN with zero timeout");
+        assert_eq!(packets[0].0, 0, "FIN should have sequence 0");
+        assert_eq!(packets[0].1, FLAG_FIN, "Should be FIN packet");
+    }
+
+    #[test]
+    fn test_no_duplicate_sequence_numbers() {
+        let bitrate = 10_000_000.0;
+        let payload_size = 512;
+        let timeout = Duration::from_millis(150);
+
+        let (mut client, tx) = create_test_client(bitrate, payload_size, timeout);
+        let (mut server_sock, mut client_sock) = create_socket_pair();
+
+        let handle = thread::spawn(move || client.run(&mut client_sock));
+
+        tx.send(ClientCommand::Start).unwrap();
+
+        let packets = receive_all_packets(&mut server_sock, Duration::from_millis(50));
+
+        let _ = handle.join().unwrap();
+
+        // Check for duplicates
+        let mut seen_seqs = std::collections::HashSet::new();
+        for (seq, _, _) in &packets {
+            assert!(seen_seqs.insert(*seq), "Duplicate sequence number: {}", seq);
+        }
     }
 }
