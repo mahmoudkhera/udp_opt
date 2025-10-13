@@ -215,7 +215,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "udp_opt"
+name = "udpopt"
 version = "0.1.0"
 dependencies = [
  "thiserror",

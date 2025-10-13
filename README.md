@@ -3,26 +3,26 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE-MIT)  
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-APACHE)
 
-`udp_opt` is A simple UDP performance testing and congestion control tool written in Rust.  
-It works similarly to `iperf`, allowing you to measure throughput, packet loss, jitter, and out-of-order packets.
+udpopt is a Rust library crate for building high-performance UDP throughput and latency testing tools.
+It provides asynchronous and synchronous implementations of UDP clients and servers that can send and receive packets with precise timing, measure bitrates, and collect detailed performance results 
 
 
 
-## ✨ Features
+##  Features
 
-// - Client: sends UDP datagrams containing a 24-byte header (seq + timestamp + flags)
-// - Server: per-client stats (throughput, loss, out-of-order, using  RFC3550 jitter formula )
-// - FIN packet signals end-of-test (client sends, server prints final summary)
-// - Configurable payload size, duration, bitrate, and report interval 
+- Asynchronous (tokio) and synchronous UDP clients and servers
 
----
-#  Usage:
-- cargo new udpperf && replace src/main.rs with this file
--  cargo run --release -- server --bind 0.0.0.0:5201 --interval 1
--  cargo run --release -- client --connect 127.0.0.1:5201 --bitrate 10M --duration 10 --size 1200 --interval 1
+-  packet pacing at configurable bitrates
+
+- Interval-based performance measurement (bitrate, packet loss, etc.)
+
+- Start/Stop control via channels for coordinated tests
+
+- Easy to integrate into other network test systems or benchmarking tools
 
 
-## Not : 
+
+## Note : 
  This project was designed to be a feature in my ideal testing tool - but I decided to make it a separate project .
 
 
