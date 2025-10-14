@@ -90,6 +90,7 @@ impl UdpClient {
             Ok(ClientCommand::Start) => {}
             Err(_) => return Err(UdpOptError::ChannelClosed),
         }
+        println!("client start");
 
         let start = Instant::now();
 

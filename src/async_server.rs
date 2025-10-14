@@ -126,6 +126,11 @@ impl AsyncUdpServer {
             }
         }
         println!("test finished");
+        // if the interval time bigger than the total time the client send
+        if self.udp_result.len() == 0 {
+            self.udp_result
+                .push(udp_data.get_interval_result(start.elapsed()));
+        }
         Ok(self.udp_result.clone())
     }
 }

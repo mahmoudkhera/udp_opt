@@ -7,7 +7,6 @@
 use crate::errors::UdpOptError;
 use crate::utils::net_utils::{IntervalResult, ServerCommand};
 use crate::utils::udp_data::{FLAG_FIN, HEADER_SIZE, UdpData, UdpHeader};
-use crate::utils::ui::print_result;
 use std::net::UdpSocket;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -47,6 +46,8 @@ impl UdpServer {
     ///  /// # Arguments
     /// - `sock`: The bound UDP socket to receive packets from.
     ///
+    /// Returns a slice of collected [`IntervalResult`]s.
+    ///
     ///
     /// # Errors
     ///
@@ -54,7 +55,7 @@ impl UdpServer {
     /// Returns [`UdpOptError::SocketTimeout`] if a UDP receive error occurs.
     /// Returns [`UdpOptError::UnexpectedCommand`] if a UDP receive error occurs.
     /// Returns [`UdpOptError::ChannelClosed`] if a UDP receive error occurs.
-    pub fn run(&mut self, sock: &mut UdpSocket) -> Result<(), UdpOptError> {
+    pub fn run(&mut self, sock: &mut UdpSocket) -> Result<Vec<IntervalResult>, UdpOptError> {
         println!("server start");
 
         let mut udp_data = UdpData::new();
@@ -75,9 +76,13 @@ impl UdpServer {
         sock.set_read_timeout(Some(Duration::from_secs(2)))
             .map_err(|_| UdpOptError::SocketTimeout)?;
 
+        println!("server     start");
+
         let mut calc_instat = Instant::now();
         let calc_interval = Duration::from_millis(200);
         let mut start = Instant::now();
+
+        println!("Collecting..");
 
         loop {
             // Check control messages
@@ -112,22 +117,18 @@ impl UdpServer {
 
             if start.elapsed() >= self.interval {
                 let res = udp_data.get_interval_result(start.elapsed());
-                print_result(&res);
                 self.udp_result.push(res);
                 start = Instant::now();
             }
         }
-
+        
         println!("test finished");
-        Ok(())
-    }
-
-    /// Returns a slice of collected [`IntervalResult`]s.
-    ///
-    /// Each `IntervalResult` represents metrics (bitrate, packet loss, etc.)
-    /// collected during a single measurement interval.
-    pub fn get_result(&self) -> &[IntervalResult] {
-        &self.udp_result
+        // if the interval time bigger than the total time the client send
+        if self.udp_result.len()==0{
+            self.udp_result.push(udp_data.get_interval_result(start.elapsed()));
+        }
+        
+        Ok(std::mem::take(&mut self.udp_result))
     }
 }
 
@@ -262,13 +263,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_result_empty() {
-        let (server, _tx) = create_test_server(Duration::from_secs(1));
-        let results = server.get_result();
-        assert_eq!(results.len(), 0);
-    }
-
-    #[test]
     fn test_interval_result_collection() {
         let interval = Duration::from_millis(200);
         let (mut server, tx) = create_test_server(interval);
@@ -278,10 +272,7 @@ mod tests {
             .set_read_timeout(Some(Duration::from_millis(100)))
             .unwrap();
 
-        let handle = thread::spawn(move || {
-            server.run(&mut server_sock).unwrap();
-            server
-        });
+        let handle = thread::spawn(move || server.run(&mut server_sock).unwrap());
 
         tx.send(ServerCommand::Start).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -303,8 +294,7 @@ mod tests {
         // Unblock the server if it's still in recv()
         client_sock.send(&create_packet(999, 0)).unwrap();
 
-        let server = handle.join().unwrap();
-        let results = server.get_result();
+        let results = handle.join().unwrap();
 
         // Should have collected at least one interval result
         assert!(results.len() > 0);

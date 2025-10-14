@@ -1,6 +1,6 @@
 [package]
 name = "udpopt"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Mahmoud Khaled Khera"]
 description = "A simple crate to test your UDP connection between two nodes"
