@@ -59,7 +59,7 @@
 //!
 //!  ```
 //!
-//! - Use `udpopt::UdpServer` to represent the test client
+//! - Use `udpopt::UdpServer` to represent the test server
 //!
 //! ```
 //! use std::net::UdpSocket;
