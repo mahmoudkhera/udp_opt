@@ -112,7 +112,7 @@
 //! ```rust
 //! use std::time::Duration;
 //! use udpopt::IntervalResult;
-//! use udpopt::TestResult; 
+//! use udpopt::TestResult;
 //!
 //! # let intervals = vec![
 //! #     IntervalResult {
@@ -137,19 +137,24 @@
 //!
 //! // Aggregate the results
 //! let result = TestResult::from_intervals(&intervals);
+//! println!("Total lost: {}", result.total_lost);
+//! println!("Total bytes: {}", result.total_bytes);
+//! println!("Total out of order: {}", result.total_out_of_order);
 //! println!("Total packets: {}", result.total_packets);
 //! println!("Mean bitrate: {:.2} bps", result.mean_bitrate);
 //! println!("Median jitter: {:.2} ms", result.median_jitter);
 //! ```
-//! 
-//! 
+//!
+//!
 //! - This produces an output similar to:
 //! ```text
+//! Total lost: 80
+//! Total bytes: 2450000
+//! Total out of order: 1
 //! Total packets: 1920
 //! Mean bitrate: 9.60e6 bps
 //! Median jitter: 1.00 ms
 //! ```
-
 
 mod client;
 pub use client::UdpClient;
@@ -161,9 +166,8 @@ pub use result::TestResult;
 mod server;
 pub use server::UdpServer;
 mod utils;
-pub use utils::net_utils::{ClientCommand, ServerCommand,IntervalResult};
+pub use utils::net_utils::{ClientCommand, IntervalResult, ServerCommand};
 pub use utils::ui;
-
 
 // async part
 mod async_client;
